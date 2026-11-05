@@ -27,6 +27,7 @@ rebuilds it from the files.
     access.yaml         who may read and write what (tracked)
     scripts/*.mjs       the vault's own rules, as hooks (tracked)
     events/<host>/<yyyy-mm>.jsonl   reads and visits, append-only (tracked by choice)
+    dismissed.jsonl     suggestions the person said no to (tracked)
     index.sqlite        the index (ignored; delete it at any time)
 ```
 
@@ -39,8 +40,9 @@ A note is a `.md` or `.markdown` file. The index reads, per note:
 
 - the frontmatter, as a subset of YAML (maps, block and flow sequences, quoted
   and plain scalars, comments, `|` and `>` block scalars; no anchors or tags);
-- the title: the first H1 within the first five non-empty lines of the body,
-  else the frontmatter `title`, else the first H1 anywhere, else the file name;
+- the title, by the vault tool's rule: the frontmatter `title`, else an H1
+  within the first five non-empty lines of the body, else the file name with
+  `_` and `-` read as spaces (an H1 further down is a section, not a title);
 - headings, links (`[[target]]`, `[[target|label]]`, `[[target#anchor]]`,
   `[text](path.md)`, `![alt](path)`), outside fenced and inline code;
 - typed relations: a list item whose first word is a relation name followed by
@@ -61,6 +63,9 @@ everywhere, and that is fine.
 
 `source` says how a note is known: `lived` (distilled from one's own
 practice), `seen` (witnessed or measured, with a date), `heard` (read or told).
+A note says it in frontmatter as `known: lived`, never as `source:`, which in
+most vaults already holds where a note came from (a URL, a book). What the note
+says wins; otherwise a script infers it; otherwise it is unknown.
 Confidence is computed, never typed in: the source sets the base, independent
 corroboration and the source card's record move it. Only a person writes
 `lived`; nothing promotes `heard` on its own.
@@ -72,11 +77,13 @@ graph or suggestions.
 
 ## Links
 
-Resolution is the vault tool's (`resolveLink` in the vault tool's `.tools/vault.mjs`),
-ported rule for rule:
+Resolution is ported rule for rule from `resolveLink` in `vault.mjs`, the
+command-line tool of the vault this package was first built against, so the
+two read a vault's links the same way:
 
-1. Normalise: backslashes to slashes, drop `./`, strip an absolute or
-   `Notes/`-prefixed path down to vault-relative, drop a `:line` suffix; try the
+1. Normalise: backslashes to slashes, drop `./`, read a path written through
+   the vault's own folder (`/Users/me/Notes/A/b.md:12`, or `Notes/A/b.md`, in
+   a vault called `Notes`) from inside it and drop its `:line` suffix; try the
    text as written and percent-decoded.
 2. A wiki link tries the path from the vault root, then from the note's
    folder; a Markdown link tries the note's folder first. Each try also tries
@@ -199,6 +206,14 @@ principals:
 `.noto/**` and `.git/**` are never writable by anyone but the owner, whatever
 the policy says: scripts in `.noto/scripts` run as code.
 
+A path an agent means to change is taken as the disk spells it, folder by
+folder in any case, so another spelling of a sealed folder is still that
+folder; it may not go through a symbolic link or into a dot folder, and a note
+that exists must be one the agent can see. Anyone but the owner sees only the
+proposals they made. A long-running MCP server opens the vault again when the
+config, the policy or a script changes, so a revoked key stops working without
+a restart.
+
 This guards agents that reach the vault only through the MCP server or this
 CLI with their key. An agent with a shell and file access is bounded by the
 operating system, not by this file; the policy then still attributes its
@@ -214,10 +229,42 @@ are made with git's plumbing against a temporary index, so the working tree,
 the person's index and their branches are never touched, and the refs are not
 branches, so nothing pushes them.
 
-Accepting merges each file three ways (`git merge-file`: the file now, the
-base, the proposal) into the working tree, and stops on a conflict for that
-file. The person commits the result their usual way. Accepting or rejecting
+Proposals are diffed without rename detection: a move is a deletion and an
+addition, and the reviewer sees and the accept applies both. Accepting merges
+each file three ways (`git merge-file`: the file now, the base, the proposal)
+into the working tree, and stops on a conflict for that file. The person commits the result their usual way. Accepting or rejecting
 deletes the ref and records an event.
+
+## Suggestions
+
+`suggest` finds the links a vault is missing: a note that names another by
+its title, a card's id or an alias without linking it (`mention`); two notes
+opened or changed together again and again with no link between them
+(`together`); a link that reaches its note only through an old path
+(`stale`); and whatever the scripts add. Each has an id, the first seven hex
+digits of the SHA-1 of its type, its note and its target, so the same
+suggestion has the same id on every run.
+
+A mention is weighed by how distinctive the name is, how many notes use it,
+and how near the two notes sit: notes in the same folder, or sharing two or
+more folders, are near, one shared folder counts 0.8, none 0.45, because across areas a title is as often an
+ordinary phrase that is some other note's title. A day's log, and a card
+named by an id or alias written in its frontmatter, are never further than
+0.8. A title with Chinese running on into it on both sides counts 0.6. Only
+running text is read: not frontmatter, headings, code, links (labels
+included), URLs or paths.
+
+Nothing is applied until the person says so: `suggest --review` asks about
+each, strongest first, then makes the yes into one proposal and applies it
+if asked; `--propose <id...>` makes a proposal; `--dismiss <id...>` says no.
+A no is a line in `.noto/dismissed.jsonl`:
+
+```json
+{"type":"mention","from":"A/B.md","to":"C/D.md","time":"2026-11-05T10:45:40.247Z"}
+```
+
+The file holds the type and both paths, not the id, so it reads without this
+package; a dismissal lapses when either note moves.
 
 ## Scripts
 
