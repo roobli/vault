@@ -10,6 +10,7 @@ import { loadAccess, type AccessPolicy, type Principal, type Sensitivity, type V
 import { loadConfig, type BrainConfig, type Kind, type Source } from './config.js';
 import { addRelationLines, appendEntry, datedPath, relationWord } from './edit.js';
 import { recordEvents, newSession, type EventVerb } from './events.js';
+import { splitFrontmatter } from './markdown.js';
 import { acceptProposal, createProposal, findRepo, listProposals, proposalDiff, rejectProposal, type AcceptResult, type FileChange, type GitRepo, type Proposal } from './git.js';
 import { refresh, type IndexContext, type RefreshStats } from './indexer.js';
 import { decay } from './memory.js';
@@ -284,6 +285,23 @@ export class Vault {
 
   textOf(rel: string): string | null {
     try { return readFileSync(path.join(this.root, rel), 'utf8'); } catch { return null; }
+  }
+
+  /** The body as search sees it: frontmatter off, the vault scripts' `text` hooks applied. */
+  readableText(rel: string): string | null {
+    const text = this.textOf(rel);
+    if (text === null) return null;
+    const { body } = splitFrontmatter(text);
+    let out = body;
+    for (const script of this.scripts.scripts) {
+      if (!script.text) continue;
+      try {
+        out = script.text({ path: rel, title: '', frontmatter: {}, body: out, headings: [], links: [] });
+      } catch {
+        return body;
+      }
+    }
+    return out.trim() ? out : body;
   }
 
   /** Whether a note has been superseded: a note says it supersedes this one, or this one says what superseded it. */

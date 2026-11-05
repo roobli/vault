@@ -175,7 +175,9 @@ export function recall(vault: Vault, cue: string, options: RecallOptions = {}): 
     if (items.length >= limit) break;
     const room = Math.min(index < 3 ? 900 : 400, budget - spent);
     if (room < 120 && items.length > 0) break;
-    const excerpt = excerptOf(vault.textOf(candidate.row.path) ?? '', pieces, room);
+    // The note's own words first; a note that is all generated list still shows that list.
+    const excerpt = excerptOf(vault.readableText(candidate.row.path) ?? '', pieces, room)
+      || excerptOf(vault.textOf(candidate.row.path) ?? '', pieces, room);
     spent += excerpt.length;
     items.push({
       path: candidate.row.path, title: candidate.row.title, kind: candidate.row.kind, source: candidate.row.source,
