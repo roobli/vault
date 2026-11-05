@@ -137,8 +137,11 @@ function buildNote(ix: IndexContext, rel: string, text: string, hash: string): B
   for (const script of ix.scripts.scripts) if (script.text) searchText = script.text({ ...scriptNote, body: searchText });
 
   const kind = derived.kind && KINDS.includes(derived.kind) ? derived.kind : kindOf(rel, fm, ix.config);
-  const fmSource = typeof fm.source === 'string' && (SOURCES as readonly string[]).includes(fm.source) ? fm.source as Source : null;
-  const source = derived.source !== undefined ? derived.source : fmSource;
+  // How a note is known is written as `known:`; `source:` in most vaults already
+  // says where a note came from (a URL, a book), so it is never read for this.
+  // What the note says wins over what a script infers: only a person writes `lived`.
+  const fmSource = typeof fm.known === 'string' && (SOURCES as readonly string[]).includes(fm.known) ? fm.known as Source : null;
+  const source = fmSource ?? (derived.source !== undefined ? derived.source : null);
   // The folder sets a floor; a script or the note itself may only raise it.
   const fmSensitivity = typeof fm.sensitivity === 'string' && (SENSITIVITIES as readonly string[]).includes(fm.sensitivity) ? fm.sensitivity as Sensitivity : null;
   const sensitivity = higher(higher(ix.access.sensitivityOf(rel), derived.sensitivity), fmSensitivity);

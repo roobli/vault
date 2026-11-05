@@ -274,9 +274,14 @@ describe('a vault as memory', () => {
       },
       text(note) { return note.body.replace(/secret/g, ''); },
     };`);
+    // The note's own word beats the script; \`source:\` is where a note came from, never how it is known.
+    write('Knowledge/索引版本命名.md', '---\nknown: lived\nsource: https://example.com/post\n---\n# 索引版本命名\n\n自己踩过。\n');
+    write('Knowledge/plan-v1.md', '---\nsource: seen\n---\n# Old plan\n\nUse a single index for everything.\n');
     const vault = await Vault.open(root, { owner: true });
     try {
       expect(vault.find('Knowledge/plan-v2.md')).toMatchObject({ source: 'heard', tags: ['knowledge'] });
+      expect(vault.find('Knowledge/索引版本命名.md')?.source).toBe('lived');
+      expect(vault.find('Knowledge/plan-v1.md')?.source).toBe('heard');
       expect(vault.find('Private/diary.md')?.sensitivity).toBe('sealed');
       expect(vault.search('secret')).toEqual([]);
     } finally {

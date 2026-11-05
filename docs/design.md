@@ -63,6 +63,9 @@ everywhere, and that is fine.
 
 `source` says how a note is known: `lived` (distilled from one's own
 practice), `seen` (witnessed or measured, with a date), `heard` (read or told).
+A note says it in frontmatter as `known: lived`, never as `source:`, which in
+most vaults already holds where a note came from (a URL, a book). What the note
+says wins; otherwise a script infers it; otherwise it is unknown.
 Confidence is computed, never typed in: the source sets the base, independent
 corroboration and the source card's record move it. Only a person writes
 `lived`; nothing promotes `heard` on its own.
