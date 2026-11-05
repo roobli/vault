@@ -172,8 +172,21 @@ async function main(argv: string[]): Promise<number> {
       '',
     ].join('\n');
     if (!existsSync(file)) writeFileSync(file, ACCESS_TEMPLATE);
-    if (!/^principals:/m.test(text)) appendFileSync(file, '\nprincipals:\n');
-    appendFileSync(file, `${readFileSync(file, 'utf8').endsWith('\n') ? '' : '\n'}${block}`);
+    const current = readFileSync(file, 'utf8');
+    if (!/^principals:\s*$/m.test(current)) {
+      appendFileSync(file, `${current.endsWith('\n') ? '' : '\n'}\nprincipals:\n${block}`);
+    } else {
+      // At the end of the principals section: before the next key that starts a line.
+      const lines = current.split('\n');
+      const start = lines.findIndex((line) => /^principals:\s*$/.test(line));
+      let end = lines.length;
+      for (let at = start + 1; at < lines.length; at += 1) {
+        if (/^[^\s#]/.test(lines[at]!)) { end = at; break; }
+      }
+      while (end > start + 1 && lines[end - 1]!.trim() === '') end -= 1;
+      lines.splice(end, 0, ...block.replace(/\n$/, '').split('\n'));
+      writeFileSync(file, lines.join('\n'));
+    }
     console.log(`Added ${name} to .noto/access.yaml. The key, shown once; give it to the agent as NOTO_VAULT_KEY:\n  ${key}`);
     return 0;
   }
@@ -325,7 +338,9 @@ async function main(argv: string[]): Promise<number> {
         return 0;
       }
       case 'mcp':
-        await serve(vault);
+        await serve(vault, {
+          reopen: () => Vault.open(root, { owner, ...(owner || !key ? {} : { key }), ...(process.env.NOTO_SESSION ? { session: process.env.NOTO_SESSION } : {}) }),
+        });
         return 0;
       default:
         throw new UsageError(`Unknown command ${command}. noto-vault help lists them.`);

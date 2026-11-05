@@ -287,6 +287,9 @@ export function refresh(ix: IndexContext, options: { full?: boolean; paths?: rea
   const insertRename = db.prepare('INSERT INTO renames(old, new, time, origin) VALUES (?, ?, ?, ?)');
 
   const changedNotes = new Set<string>();
+  const priorAliases = new Map<string, string>();
+  for (const row of db.prepare('SELECT path, aliases FROM notes').all() as { path: string; aliases: string }[]) priorAliases.set(row.path, row.aliases);
+  let aliasesChanged = false;
   let parsed = 0;
   let moved = 0;
   const now = Date.now();
@@ -340,6 +343,9 @@ export function refresh(ix: IndexContext, options: { full?: boolean; paths?: rea
       mark = performance.now();
       const built = buildNote(ix, rel, read.text, read.hash);
       buildMs += performance.now() - mark;
+      // Other notes' links may resolve through this note's names: if they changed, every link is looked at again.
+      const before = priorAliases.get(rel);
+      if (before !== undefined && before !== built.row.aliases) aliasesChanged = true;
       const prior = noteId.get(rel) as { nid: number } | undefined;
       if (prior) deleteFts.run(prior.nid);
       deleteLinks.run(rel);
@@ -374,7 +380,7 @@ export function refresh(ix: IndexContext, options: { full?: boolean; paths?: rea
   lap('rename aliases');
 
   // Links: every note's when the set of files or the aliases changed, else the changed notes'.
-  const relinked: RefreshStats['relinked'] = fileSetChanged || renamesChanged ? 'all' : changedNotes.size > 0 ? 'changed' : 'none';
+  const relinked: RefreshStats['relinked'] = fileSetChanged || renamesChanged || aliasesChanged ? 'all' : changedNotes.size > 0 ? 'changed' : 'none';
   if (relinked !== 'none') resolveLinks(ix, new Set(disk.keys()), relinked === 'all' ? null : changedNotes);
   lap(`links (${relinked})`);
 
@@ -395,19 +401,22 @@ export function refresh(ix: IndexContext, options: { full?: boolean; paths?: rea
 function ingestGit(ix: IndexContext, repo: GitRepo, full: boolean): number {
   const { store } = ix;
   const head = headCommit(repo);
-  const last = full ? null : store.meta('git_head');
-  if (!head || head === last) return 0;
-  let since = last;
-  if (full || (since && !isAncestor(repo, since, head))) {
-    // A full rebuild, or history rewritten under us: read it again from the start.
-    store.db.exec("DELETE FROM commits; DELETE FROM changes; DELETE FROM renames WHERE origin = 'git';");
-    since = null;
-  }
-  const commits = commitsSince(repo, since);
+  if (!head || (!full && head === store.meta('git_head'))) return 0;
   const insertCommit = store.db.prepare('INSERT OR IGNORE INTO commits(hash, time, author, subject, files) VALUES (?, ?, ?, ?, ?)');
-  const insertChange = store.db.prepare('INSERT INTO changes(hash, time, author, path, status, old) VALUES (?, ?, ?, ?, ?, ?)');
+  const insertChange = store.db.prepare('INSERT OR IGNORE INTO changes(hash, time, author, path, status, old) VALUES (?, ?, ?, ?, ?, ?)');
   const insertRename = store.db.prepare('INSERT INTO renames(old, new, time, origin) VALUES (?, ?, ?, ?)');
-  store.transaction(() => {
+  // Read where the last refresh stopped inside the write lock, so two processes
+  // refreshing at once cannot both read the same commits.
+  return store.transaction(() => {
+    const last = full ? null : store.meta('git_head');
+    if (head === last) return 0;
+    let since = last;
+    if (full || (since && !isAncestor(repo, since, head))) {
+      // A full rebuild, or history rewritten under us: read it again from the start.
+      store.db.exec("DELETE FROM commits; DELETE FROM changes; DELETE FROM renames WHERE origin = 'git';");
+      since = null;
+    }
+    const commits = commitsSince(repo, since, head);
     for (const commit of commits) {
       const notes = commit.changes.filter((change) => isMarkdown(change.path));
       insertCommit.run(commit.hash, commit.time, commit.author, commit.subject, notes.length);
@@ -420,8 +429,8 @@ function ingestGit(ix: IndexContext, repo: GitRepo, full: boolean): number {
       }
     }
     store.setMeta('git_head', head);
+    return commits.length;
   });
-  return commits.length;
 }
 
 function rebuildRenameAliases(ix: IndexContext, files: ReadonlySet<string>): void {
@@ -475,8 +484,6 @@ function ingestEvents(ix: IndexContext): number {
   const { store, root } = ix;
   const dir = eventsDir(root);
   if (!existsSync(dir)) return 0;
-  const offsets = new Map<string, number>();
-  for (const row of store.db.prepare('SELECT file, offset FROM event_files').all() as { file: string; offset: number }[]) offsets.set(row.file, row.offset);
   const files: { rel: string; size: number }[] = [];
   for (const host of readdirSync(dir, { withFileTypes: true })) {
     if (!host.isDirectory()) continue;
@@ -486,15 +493,18 @@ function ingestEvents(ix: IndexContext): number {
       files.push({ rel, size: statSync(path.join(dir, rel)).size });
     }
   }
-  // A file that shrank was rewritten: start the events over.
-  if (files.some((file) => (offsets.get(file.rel) ?? 0) > file.size)) {
-    store.db.exec('DELETE FROM events; DELETE FROM event_files;');
-    offsets.clear();
-  }
   const insert = store.db.prepare('INSERT INTO events(time, actor, verb, path, session, from_path, query) VALUES (?, ?, ?, ?, ?, ?, ?)');
   const setOffset = store.db.prepare('INSERT INTO event_files(file, offset) VALUES (?, ?) ON CONFLICT(file) DO UPDATE SET offset = excluded.offset');
   let count = 0;
   store.transaction(() => {
+    // Offsets are read inside the write lock, so two processes never read the same lines.
+    const offsets = new Map<string, number>();
+    for (const row of store.db.prepare('SELECT file, offset FROM event_files').all() as { file: string; offset: number }[]) offsets.set(row.file, row.offset);
+    // A file that shrank was rewritten: start the events over.
+    if (files.some((file) => (offsets.get(file.rel) ?? 0) > file.size)) {
+      store.db.exec('DELETE FROM events; DELETE FROM event_files;');
+      offsets.clear();
+    }
     for (const file of files) {
       const offset = offsets.get(file.rel) ?? 0;
       if (file.size <= offset) continue;

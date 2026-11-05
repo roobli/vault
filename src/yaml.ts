@@ -51,7 +51,7 @@ class Parser {
     if (isSeqItem(content)) return this.seq(indent);
     if (splitKey(content)) return this.map(indent);
     this.i += 1;
-    return this.inline(content);
+    return this.inline(content, indent);
   }
 
   private seq(indent: number): YamlValue[] {
@@ -77,7 +77,7 @@ class Parser {
         continue;
       }
       this.i += 1;
-      out.push(this.inline(rest));
+      out.push(this.inline(rest, indent));
     }
     return out;
   }
@@ -119,27 +119,34 @@ class Parser {
         out[key] = this.blockScalar(value, indent);
         continue;
       }
-      out[key] = this.inline(raw);
+      out[key] = this.inline(raw, indent);
     }
     return out;
   }
 
-  /** A value on one line, or a flow collection or quoted scalar that runs on. */
-  private inline(raw: string): YamlValue {
+  /**
+   * A value on one line, or a flow collection or quoted scalar that runs on.
+   * It runs on only over lines indented past its key, so one that is never
+   * closed does not swallow the keys after it.
+   */
+  private inline(raw: string, indent = -1): YamlValue {
     let text = raw.trim();
+    const continues = () => this.i < this.lines.length && (this.lines[this.i]!.trim() === '' || indentOf(this.lines[this.i]!) > indent);
     if (text.startsWith('[') || text.startsWith('{')) {
       text = stripComment(text);
-      while (!balanced(text) && this.i < this.lines.length) {
+      while (!balanced(text) && continues()) {
         text += ` ${stripComment(this.lines[this.i]!.trim())}`;
         this.i += 1;
       }
       return parseFlow(text);
     }
     if (text.startsWith('"') && !closedQuote(text)) {
-      while (!closedQuote(text) && this.i < this.lines.length) {
+      while (!closedQuote(text) && continues()) {
         text += ` ${this.lines[this.i]!.trim()}`;
         this.i += 1;
       }
+      // Never closed: the text as written, not a quoted scalar.
+      if (!closedQuote(text)) return text.slice(1).trim();
     }
     return scalar(stripComment(text));
   }
@@ -307,7 +314,10 @@ function parseFlow(text: string): YamlValue {
         if (at >= text.length) return out;
         if (text[at] === ']') { at += 1; return out; }
         if (text[at] === ',') { at += 1; continue; }
+        const before = at;
         out.push(value(',]'));
+        // Malformed input (a stray `}`): step over it rather than loop.
+        if (at === before) at += 1;
       }
     }
     if (ch === '{') {
@@ -318,9 +328,11 @@ function parseFlow(text: string): YamlValue {
         if (at >= text.length) return out;
         if (text[at] === '}') { at += 1; return out; }
         if (text[at] === ',') { at += 1; continue; }
+        const before = at;
         const key = String(value(':,}') ?? '');
         space();
         if (text[at] === ':') { at += 1; out[key] = value(',}'); } else out[key] = null;
+        if (at === before) at += 1;
       }
     }
     if (ch === '"' || ch === "'") {

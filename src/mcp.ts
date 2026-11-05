@@ -186,10 +186,18 @@ export interface ServeOptions {
   readonly output?: NodeJS.WritableStream;
   /** Refresh the index before a call when the last refresh is older than this. */
   readonly refreshAfterMs?: number;
+  /**
+   * Open the vault again, under the access policy, config and scripts as they
+   * are now. Called when one of them changed, so a revoked key or a tightened
+   * policy holds without a restart.
+   */
+  readonly reopen?: () => Promise<Vault>;
 }
 
 /** Serve until stdin closes. */
-export function serve(vault: Vault, options: ServeOptions = {}): Promise<void> {
+export function serve(initial: Vault, options: ServeOptions = {}): Promise<void> {
+  let vault = initial;
+  let broken: string | null = null;
   const input = options.input ?? process.stdin;
   const output = options.output ?? process.stdout;
   const refreshAfter = options.refreshAfterMs ?? 2000;
@@ -233,6 +241,7 @@ export function serve(vault: Vault, options: ServeOptions = {}): Promise<void> {
           return;
         }
         try {
+          if (broken) throw new Error(broken);
           if (Date.now() - refreshedAt > refreshAfter) { vault.refresh(); refreshedAt = Date.now(); }
           const result = callTool(vault, name, (params.arguments && typeof params.arguments === 'object' ? params.arguments : {}) as Json);
           reply(id, { content: [{ type: 'text', text: result.text }], structuredContent: result.structured, isError: false });
@@ -247,23 +256,54 @@ export function serve(vault: Vault, options: ServeOptions = {}): Promise<void> {
     }
   };
 
+  /** Before a call: when the policy changed, serve under the new one, or refuse if the key no longer counts. */
+  const recheck = async () => {
+    if (!options.reopen || !vault.stale()) return;
+    try {
+      const next = await options.reopen();
+      vault.close();
+      vault = next;
+      broken = null;
+    } catch (error) {
+      broken = `The vault's access policy changed and this server can no longer serve: ${(error as Error).message}`;
+    }
+  };
+
+  // One message at a time, in order: a reopen must finish before the next call reads the vault.
+  let queue: Promise<void> = Promise.resolve();
   return new Promise((resolve) => {
     const lines = createInterface({ input, crlfDelay: Infinity });
-    lines.on('line', (line) => {
-      if (!line.trim()) return;
-      let message: Json;
+    lines.on('close', () => {
+      void queue.then(() => {
+        // The vault this server opened again is its own to close; the first is the caller's.
+        if (vault !== initial) vault.close();
+        resolve();
+      });
+    });
+    lines.on('line', (line) => { queue = queue.then(() => receive(line)); });
+  });
+
+  async function receive(line: string): Promise<void> {
+    if (!line.trim()) return;
+    {
+      let parsed: unknown;
       try {
-        message = JSON.parse(line) as Json;
+        parsed = JSON.parse(line);
       } catch {
         fail(null, -32700, 'Parse error');
         return;
       }
+      if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
+        fail(null, -32600, 'Invalid request: one JSON-RPC object per line');
+        return;
+      }
+      const message = parsed as Json;
       try {
+        if (message.method === 'tools/call') await recheck();
         handle(message);
       } catch (error) {
-        fail(message.id, -32603, (error as Error).message);
+        fail(message.id ?? null, -32603, (error as Error).message);
       }
-    });
-    lines.on('close', () => resolve());
-  });
+    }
+  }
 }

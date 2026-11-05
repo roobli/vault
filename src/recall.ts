@@ -88,7 +88,8 @@ export function recall(vault: Vault, cue: string, options: RecallOptions = {}): 
     return db.prepare(`SELECT n.nid, n.path, n.title, n.kind, n.source, n.sensitivity, n.status, n.date, n.hash, bm25(fts, 8.0, 3.0, 1.0) AS rank
       FROM fts JOIN notes n ON n.nid = fts.rowid WHERE fts MATCH ? ORDER BY rank LIMIT ?`).all(expression, count) as unknown as (Row & { rank: number })[];
   };
-  const any = search('loose', 80);
+  // An agent's hidden notes must not crowd out what it can see.
+  const any = search('loose', vault.principal.owner ? 80 : 600);
   const best = any.length > 0 ? -any[0]!.rank : 1;
   // A title is the note's own summary: the share of the cue's words it holds counts on top.
   const terms = looseTerms(cue);

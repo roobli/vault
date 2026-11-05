@@ -162,7 +162,13 @@ export interface ParseOptions {
 export function parseNote(path: string, text: string, options: ParseOptions = {}): ParsedNote {
   const vocabulary = options.relations ?? DEFAULT_RELATIONS;
   const { frontmatter, body } = splitFrontmatter(text);
-  const fm = frontmatter ? parseYamlMap(frontmatter.replace(/^---[^\n]*\n/, '').replace(/\n---[^\n]*\n?$/, '\n')) : {};
+  let fm: Record<string, YamlValue> = {};
+  try {
+    if (frontmatter) fm = parseYamlMap(frontmatter.replace(/^---[^\n]*\n/, '').replace(/\n---[^\n]*\n?$/, '\n'));
+  } catch {
+    // Frontmatter that cannot be read is no reason to leave the note out.
+    fm = {};
+  }
   const bodyStart = frontmatter.length;
 
   // Line starts, for line numbers and relation lines.

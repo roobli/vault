@@ -8,7 +8,7 @@ import { mkdirSync } from 'node:fs';
 import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 
-export const SCHEMA_VERSION = 1;
+export const SCHEMA_VERSION = 2;
 
 const SCHEMA = `
 CREATE TABLE meta(key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -57,6 +57,7 @@ CREATE TABLE commits(hash TEXT PRIMARY KEY, time INTEGER NOT NULL, author TEXT N
 CREATE TABLE changes(hash TEXT NOT NULL, time INTEGER NOT NULL, author TEXT NOT NULL, path TEXT NOT NULL, status TEXT NOT NULL, old TEXT);
 CREATE INDEX changes_path ON changes(path);
 CREATE INDEX changes_hash ON changes(hash);
+CREATE UNIQUE INDEX changes_once ON changes(hash, path);
 CREATE TABLE events(time INTEGER NOT NULL, actor TEXT NOT NULL, verb TEXT NOT NULL, path TEXT NOT NULL, session TEXT, from_path TEXT, query TEXT);
 CREATE INDEX events_path ON events(path);
 CREATE TABLE event_files(file TEXT PRIMARY KEY, offset INTEGER NOT NULL);

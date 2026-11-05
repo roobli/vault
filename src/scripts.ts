@@ -72,16 +72,25 @@ export function scriptsDir(root: string): string {
   return path.join(root, '.noto', 'scripts');
 }
 
+/** Changes whenever a script does, read without running any. */
+export function scriptsFingerprint(root: string): string {
+  const dir = scriptsDir(root);
+  if (!existsSync(dir)) return 'none';
+  const hash = createHash('sha256');
+  for (const name of readdirSync(dir).filter((entry) => /\.m?js$/.test(entry)).sort()) {
+    hash.update(name).update('\0').update(readFileSync(path.join(dir, name))).update('\0');
+  }
+  return hash.digest('hex');
+}
+
 export async function loadScripts(root: string): Promise<LoadedScripts> {
   const dir = scriptsDir(root);
   if (!existsSync(dir)) return { scripts: [], fingerprint: 'none' };
   const files = readdirSync(dir).filter((name) => /\.m?js$/.test(name)).sort();
-  const hash = createHash('sha256');
   const scripts: VaultScript[] = [];
   for (const name of files) {
     const file = path.join(dir, name);
     const source = readFileSync(file);
-    hash.update(name).update('\0').update(source).update('\0');
     const version = createHash('sha256').update(source).digest('hex').slice(0, 12);
     let loaded: { default?: VaultScript };
     try {
@@ -91,7 +100,7 @@ export async function loadScripts(root: string): Promise<LoadedScripts> {
     }
     if (loaded.default && typeof loaded.default === 'object') scripts.push({ name, ...loaded.default });
   }
-  return { scripts, fingerprint: hash.digest('hex') };
+  return { scripts, fingerprint: scriptsFingerprint(root) };
 }
 
 export function scriptContext(root: string, config: BrainConfig): ScriptContext {
