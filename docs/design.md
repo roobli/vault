@@ -77,11 +77,13 @@ graph or suggestions.
 
 ## Links
 
-Resolution is the vault tool's (`resolveLink` in the vault tool's `.tools/vault.mjs`),
-ported rule for rule:
+Resolution is ported rule for rule from `resolveLink` in `vault.mjs`, the
+command-line tool of the vault this package was first built against, so the
+two read a vault's links the same way:
 
-1. Normalise: backslashes to slashes, drop `./`, strip an absolute or
-   `Notes/`-prefixed path down to vault-relative, drop a `:line` suffix; try the
+1. Normalise: backslashes to slashes, drop `./`, read a path written through
+   the vault's own folder (`/Users/me/Notes/A/b.md:12`, or `Notes/A/b.md`, in
+   a vault called `Notes`) from inside it and drop its `:line` suffix; try the
    text as written and percent-decoded.
 2. A wiki link tries the path from the vault root, then from the note's
    folder; a Markdown link tries the note's folder first. Each try also tries

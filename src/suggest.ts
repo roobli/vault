@@ -291,7 +291,7 @@ export function suggest(vault: Vault, options: SuggestOptions = {}): Suggestion[
         replacement = `[[${written}${row.anchor}${row.label !== null ? `|${row.label}` : ''}]]`;
       } else {
         // Keep the link's own style: an absolute path stays absolute, a `:line` suffix stays.
-        const absolute = /^(\/.*?\/)(?:Notes\/)?/.exec(row.target) && row.target.startsWith('/');
+        const absolute = row.target.startsWith('/');
         const line = /:\d+$/.exec(row.target)?.[0] ?? '';
         let where: string;
         if (absolute) {

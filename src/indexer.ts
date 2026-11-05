@@ -457,17 +457,17 @@ function rebuildRenameAliases(ix: IndexContext, files: ReadonlySet<string>): voi
   });
 }
 
-export function loadResolveIndex(store: Store, files: Iterable<string>): ResolveIndex {
+export function loadResolveIndex(store: Store, files: Iterable<string>, rootName?: string): ResolveIndex {
   const aliases = new Map<string, string[]>();
   for (const row of store.db.prepare('SELECT key, path FROM aliases').all() as { key: string; path: string }[]) {
     (aliases.get(row.key) ?? aliases.set(row.key, []).get(row.key)!).push(row.path);
   }
-  return buildResolveIndex(files, aliases);
+  return buildResolveIndex(files, aliases, rootName);
 }
 
 function resolveLinks(ix: IndexContext, files: ReadonlySet<string>, only: ReadonlySet<string> | null): void {
   const { store } = ix;
-  const index = loadResolveIndex(store, files);
+  const index = loadResolveIndex(store, files, path.basename(ix.root));
   const rows = store.db.prepare('SELECT rowid AS id, src, kind, target, resolved, ambiguous, via FROM links').all() as
     { id: number; src: string; kind: Link['kind']; target: string; resolved: string | null; ambiguous: number; via: string | null }[];
   const update = store.db.prepare('UPDATE links SET resolved = ?, ambiguous = ?, via = ? WHERE rowid = ?');

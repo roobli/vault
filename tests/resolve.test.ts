@@ -25,8 +25,12 @@ describe('resolving a link by the vault tool\'s rules', () => {
     expect(resolveLink(index, 'A', { target: 'nowhere/x.md', kind: 'md' })).toBeNull();
   });
 
-  it('decodes, and trims an absolute vault path', () => {
-    expect(resolveLink(index, '', { target: '/Users/x/Notes/A/Argus.md:12', kind: 'md' })?.path).toBe('A/Argus.md');
+  it('decodes, and reads a path through the vault\'s own folder from inside it', () => {
+    const named = buildResolveIndex(files, undefined, 'My Notes');
+    expect(resolveLink(named, '', { target: '/Users/x/My Notes/A/Argus.md:12', kind: 'md' })?.path).toBe('A/Argus.md');
+    expect(resolveLink(named, 'B', { target: 'My Notes/A/Argus.md', kind: 'md' })?.path).toBe('A/Argus.md');
+    // Without the folder's name nothing is taken off: another folder called that is just a folder.
+    expect(resolveLink(index, '', { target: '/Users/x/My Notes/A/Argus.md:12', kind: 'md' })).toBeNull();
     expect(wiki('A%2FArgus')?.path).toBe('A/Argus.md');
   });
 

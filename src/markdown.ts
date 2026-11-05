@@ -1,8 +1,8 @@
 /**
  * What the index reads out of one note.
  *
- * The link extraction is the vault tool's `.tools/vault.mjs` `extractLinks`, ported
- * rule for rule, so the index, the vault's own tools and Noto agree on what
+ * The link extraction is `extractLinks` from the vault tool this package was
+ * built against (`vault.mjs`), ported rule for rule, so the index, the vault's own tools and Noto agree on what
  * is a link: wiki links whose target has a letter or a CJK character, and
  * Markdown links and images whose target is not a URL or an anchor, outside
  * fenced and inline code.

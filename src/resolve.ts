@@ -1,8 +1,9 @@
 /**
  * Which file a link means.
  *
- * Rules 1 to 3 are the vault tool's `resolveLink` from `.tools/vault.mjs`, the
- * resolver its `mv`, `relink` and graph already share. Rule 4 is new: a link
+ * Rules 1 to 3 are ported from the `resolveLink` of the vault tool this
+ * package was built against (`vault.mjs`), the resolver its `mv`, `relink` and
+ * graph already share, so both read a vault's links the same way. Rule 4 is new: a link
  * that matched no file is tried, case-insensitively, against file names and
  * then against aliases (card ids and aliases, old paths and names from git's
  * renames), so a link written before a move keeps meaning its note.
@@ -21,6 +22,12 @@ export interface ResolveIndex {
   readonly byBaseLower?: ReadonlyMap<string, readonly string[]>;
   /** Lowercased alias, to the notes it names. */
   readonly aliases?: ReadonlyMap<string, readonly string[]>;
+  /**
+   * A path written through the vault's own folder, absolute or not
+   * (`/Users/me/Notes/A/b.md:12`, `Notes/A/b.md` in a vault called Notes):
+   * what follows the folder is the vault-relative path.
+   */
+  readonly throughRoot?: RegExp;
 }
 
 export interface Resolution {
@@ -38,7 +45,7 @@ function safeDecode(value: string): string {
 export const baseKey = (rel: string): string => withoutExt(path.posix.basename(rel));
 export const aliasKey = (value: string): string => withoutExt(value.replace(/\\/g, '/').trim()).toLowerCase();
 
-export function buildResolveIndex(files: Iterable<string>, aliases?: ReadonlyMap<string, readonly string[]>): ResolveIndex {
+export function buildResolveIndex(files: Iterable<string>, aliases?: ReadonlyMap<string, readonly string[]>, rootName?: string): ResolveIndex {
   const set = new Set<string>();
   const byBase = new Map<string, string[]>();
   const byBaseLower = new Map<string, string[]>();
@@ -49,12 +56,13 @@ export function buildResolveIndex(files: Iterable<string>, aliases?: ReadonlyMap
     const lower = base.toLowerCase();
     (byBaseLower.get(lower) ?? byBaseLower.set(lower, []).get(lower)!).push(rel);
   }
-  return aliases ? { files: set, byBase, byBaseLower, aliases } : { files: set, byBase, byBaseLower };
+  const throughRoot = rootName ? new RegExp(`^(?:/.*?/|)${rootName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}/(.+)$`) : undefined;
+  return { files: set, byBase, byBaseLower, ...(aliases ? { aliases } : {}), ...(throughRoot ? { throughRoot } : {}) };
 }
 
 export function resolveLink(index: ResolveIndex, fromDir: string, link: { readonly target: string; readonly kind: LinkKind }): Resolution | null {
   let raw = link.target.replace(/\\/g, '/').replace(/^\.\//, '').trim();
-  const inVault = /^(?:\/.*?\/|)Notes\/(.+)$/.exec(raw);
+  const inVault = index.throughRoot?.exec(raw);
   if (inVault) raw = inVault[1]!.replace(/:\d+$/, '');
   const variants = [raw, safeDecode(raw)];
   const tryPath = (candidate: string): string | null => {
