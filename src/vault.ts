@@ -17,7 +17,7 @@ import { isMarkdown, nameOf, normalise } from './paths.js';
 import { aliasKey, wikiLinkTo, buildResolveIndex } from './resolve.js';
 import { loadScripts, scriptContext, type LoadedScripts } from './scripts.js';
 import { indexPath, SCHEMA_VERSION, Store } from './store.js';
-import { matchExpression, queryPieces } from './tokenize.js';
+import { looseExpression, matchExpression, queryPieces } from './tokenize.js';
 
 export class AccessError extends Error {
   constructor(message: string) {
@@ -251,8 +251,8 @@ export class Vault {
   search(query: string, options: SearchOptions = {}): SearchHit[] {
     this.requireVerb('search');
     const limit = options.limit ?? 20;
-    const run = (mode: 'all' | 'any') => {
-      const expression = matchExpression(query, mode);
+    const run = (mode: 'all' | 'any' | 'loose') => {
+      const expression = mode === 'loose' ? looseExpression(query) : matchExpression(query, mode);
       if (!expression) return [];
       return this.store.db.prepare(`SELECT n.nid, n.path, n.title, n.id, n.kind, n.source, n.sensitivity, n.status, n.date, n.hash, n.tags, n.aliases,
           bm25(fts, 8.0, 3.0, 1.0) AS rank
@@ -260,6 +260,7 @@ export class Vault {
     };
     let rows = run(options.mode ?? 'all');
     if (rows.length === 0 && (options.mode ?? 'all') === 'all') rows = run('any');
+    if (rows.length === 0) rows = run('loose');
     const wanted = query.trim().toLowerCase();
     const now = Date.now();
     const scored = rows

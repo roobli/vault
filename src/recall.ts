@@ -14,7 +14,7 @@ import type { Kind, Source } from './config.js';
 import type { Sensitivity } from './access.js';
 import { decay } from './memory.js';
 import { aliasKey } from './resolve.js';
-import { matchExpression, queryPieces } from './tokenize.js';
+import { looseExpression, looseTerms, matchExpression, queryPieces } from './tokenize.js';
 import type { Vault } from './vault.js';
 
 export interface RecallItem {
@@ -69,7 +69,7 @@ export function recall(vault: Vault, cue: string, options: RecallOptions = {}): 
   const db = vault.store.db;
   const budget = options.budget ?? vault.config.budget.recallChars;
   const limit = options.limit ?? 12;
-  const pieces = queryPieces(cue);
+  const pieces = [...new Set([...queryPieces(cue), ...looseTerms(cue)])];
   const candidates = new Map<string, Candidate>();
   const rowOf = db.prepare('SELECT nid, path, title, kind, source, sensitivity, status, date, hash FROM notes WHERE path = ?');
   const offer = (row: Row | undefined, relevance: number, why: string) => {
@@ -82,15 +82,25 @@ export function recall(vault: Vault, cue: string, options: RecallOptions = {}): 
   };
 
   // Seeds: full text, any piece; every piece counts extra.
-  const search = (mode: 'all' | 'any', count: number) => {
-    const expression = matchExpression(cue, mode);
+  const search = (mode: 'all' | 'loose', count: number) => {
+    const expression = mode === 'all' ? matchExpression(cue, 'all') : looseExpression(cue) ?? matchExpression(cue, 'any');
     if (!expression) return [];
     return db.prepare(`SELECT n.nid, n.path, n.title, n.kind, n.source, n.sensitivity, n.status, n.date, n.hash, bm25(fts, 8.0, 3.0, 1.0) AS rank
       FROM fts JOIN notes n ON n.nid = fts.rowid WHERE fts MATCH ? ORDER BY rank LIMIT ?`).all(expression, count) as unknown as (Row & { rank: number })[];
   };
-  const any = search('any', 80);
+  const any = search('loose', 80);
   const best = any.length > 0 ? -any[0]!.rank : 1;
-  for (const row of any) offer(row, Math.max(0.05, -row.rank / best), 'matches the cue');
+  // A title is the note's own summary: the share of the cue's words it holds counts on top.
+  const terms = looseTerms(cue);
+  const titleShare = (row: Row) => {
+    if (terms.length === 0) return 0;
+    const title = `${row.title} ${row.path.slice(row.path.lastIndexOf('/') + 1)}`.toLowerCase();
+    return terms.filter((term) => title.includes(term)).length / terms.length;
+  };
+  for (const row of any) {
+    const share = titleShare(row);
+    offer(row, Math.max(0.05, -row.rank / best) + 0.6 * share, share >= 0.5 ? 'the title answers the cue' : 'matches the cue');
+  }
   for (const row of search('all', 40)) offer(row, 0.35, 'matches every word of the cue');
 
   // Seeds: the cue is a title, an id or an alias.

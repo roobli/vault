@@ -23,3 +23,12 @@ describe('full text over Chinese and English', () => {
     expect(matchExpression('  ,, ')).toBeNull();
   });
 });
+
+describe('the words of a question', () => {
+  it('keeps topic bigrams and English words, and drops question words and particles', async () => {
+    const { looseTerms } = await import('../src/tokenize.js');
+    expect(looseTerms('控制面要不要迁到亚马逊的轻量服务器')).toEqual(['控制', '制面', '面要', '要迁', '迁到', '到亚', '亚马', '马逊', '轻量', '量服', '服务', '务器']);
+    expect(looseTerms('how does the GFW detect proxies')).toEqual(['gfw', 'detect', 'proxies']);
+    expect(looseTerms('怎么')).toEqual([]);
+  });
+});
