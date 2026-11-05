@@ -2,9 +2,14 @@
   "name": "@roobli/vault",
   "version": "0.1.0",
   "description": "A vault of plain Markdown notes as memory for people and agents: one link resolver, a rebuildable index, scoped access, and recall.",
-  "license": "MIT",
+  "license": "AGPL-3.0-only",
   "type": "module",
   "author": "roobli",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/roobli/vault.git"
+  },
+  "homepage": "https://github.com/roobli/vault#readme",
   "packageManager": "pnpm@11.18.0",
   "files": [
     "dist",

@@ -72,3 +72,10 @@ Scripts run as code, so `.noto/` is never writable by an agent.
 pnpm verify                         # typecheck, tests, build
 NOTO_VAULT_PROFILE=1 noto-vault index --full    # phase timings on stderr
 ```
+
+## License
+
+AGPL-3.0-only, as Noto is. See [LICENSE](LICENSE). A program that only talks
+to `noto-vault mcp` or runs the CLI is a separate program. A program that
+includes the package and is distributed, or a modified version offered to
+people over a network, offers its source under the same license.
