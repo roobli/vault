@@ -353,6 +353,8 @@ function mentions(vault: Vault, sources: readonly NoteLite[], notes: readonly No
     const replacement = link === written ? `[[${written}]]` : `[[${link}|${written}]]`;
     const lineStart = text.lastIndexOf('\n', start - 1) + 1;
     const lineEnd = text.indexOf('\n', end);
+    // In a table row a label's `|` would end the cell, and the escaped form is not a link to the vault's tools.
+    if (replacement.includes('|') && /^\s*\|/.test(text.slice(lineStart, start))) continue;
     const line = text.slice(0, start).split('\n').length;
     out.push({
       type: 'mention', from: from.path, to: to.path, toTitle: to.title, line,

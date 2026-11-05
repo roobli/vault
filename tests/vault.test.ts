@@ -32,6 +32,7 @@ beforeEach(() => {
   write('Knowledge/索引版本命名.md', '# 索引版本命名\n\n索引的版本名要带日期，回滚时才找得到。\n');
   write('Knowledge/old-plan.md', '# Old plan\n\nUse a single index for everything.\n');
   write('Inbox/2026_11_04_想法.md', '# 想法\n\n索引版本命名这件事要写进规范。Argus 那边也要改。\n');
+  write('Inbox/table.md', '# Table\n\n| what | where |\n| --- | --- |\n| Old plan | here |\n');
   write('Private/diary.md', '# Diary\n\nsecret things about Argus\n');
   write('Sealed/keys.md', '# Keys\n\nArgus root password\n');
   commit('first', '2026-11-01T10:00:00Z');
@@ -66,7 +67,7 @@ describe('a vault as memory', () => {
   it('indexes notes with their kinds, and finds them by path, id, alias and old path', async () => {
     const vault = await Vault.open(root, { owner: true });
     try {
-      expect(vault.status()).toMatchObject({ notes: 8, kinds: { card: 1, log: 2, note: 5 } });
+      expect(vault.status()).toMatchObject({ notes: 9, kinds: { card: 1, log: 2, note: 6 } });
       expect(vault.find('argus')?.path).toBe('Projects/Argus/00_索引.md');
       expect(vault.find('ArgusOld')?.kind).toBe('card');
       expect(vault.find('Knowledge/old-plan')?.path).toBe('Knowledge/plan-v1.md');
@@ -210,6 +211,8 @@ describe('a vault as memory', () => {
       const mention = all.find((item) => item.type === 'mention' && item.from === 'Inbox/2026_11_04_想法.md' && item.to === 'Knowledge/索引版本命名.md')!;
       expect(mention.splice!.replacement).toBe('[[索引版本命名]]');
       expect(all.some((item) => item.type === 'mention' && item.to === 'Projects/Argus/00_索引.md' && item.from === 'Inbox/2026_11_04_想法.md')).toBe(true);
+      // "Old plan" in a table would need a label, whose | would split the cell.
+      expect(all.some((item) => item.from === 'Inbox/table.md')).toBe(false);
       const stale = all.find((item) => item.type === 'stale')!;
       expect(stale).toMatchObject({ from: 'Knowledge/plan-v2.md', to: 'Knowledge/plan-v1.md' });
       expect(stale.splice!.replacement).toBe('[[plan-v1]]');
