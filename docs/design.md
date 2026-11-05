@@ -39,8 +39,9 @@ A note is a `.md` or `.markdown` file. The index reads, per note:
 
 - the frontmatter, as a subset of YAML (maps, block and flow sequences, quoted
   and plain scalars, comments, `|` and `>` block scalars; no anchors or tags);
-- the title: the first H1 within the first five non-empty lines of the body,
-  else the frontmatter `title`, else the first H1 anywhere, else the file name;
+- the title, by the vault tool's rule: the frontmatter `title`, else an H1
+  within the first five non-empty lines of the body, else the file name with
+  `_` and `-` read as spaces (an H1 further down is a section, not a title);
 - headings, links (`[[target]]`, `[[target|label]]`, `[[target#anchor]]`,
   `[text](path.md)`, `![alt](path)`), outside fenced and inline code;
 - typed relations: a list item whose first word is a relation name followed by
@@ -199,6 +200,14 @@ principals:
 `.noto/**` and `.git/**` are never writable by anyone but the owner, whatever
 the policy says: scripts in `.noto/scripts` run as code.
 
+A path an agent means to change is taken as the disk spells it, folder by
+folder in any case, so another spelling of a sealed folder is still that
+folder; it may not go through a symbolic link or into a dot folder, and a note
+that exists must be one the agent can see. Anyone but the owner sees only the
+proposals they made. A long-running MCP server opens the vault again when the
+config, the policy or a script changes, so a revoked key stops working without
+a restart.
+
 This guards agents that reach the vault only through the MCP server or this
 CLI with their key. An agent with a shell and file access is bounded by the
 operating system, not by this file; the policy then still attributes its
@@ -214,9 +223,10 @@ are made with git's plumbing against a temporary index, so the working tree,
 the person's index and their branches are never touched, and the refs are not
 branches, so nothing pushes them.
 
-Accepting merges each file three ways (`git merge-file`: the file now, the
-base, the proposal) into the working tree, and stops on a conflict for that
-file. The person commits the result their usual way. Accepting or rejecting
+Proposals are diffed without rename detection: a move is a deletion and an
+addition, and the reviewer sees and the accept applies both. Accepting merges
+each file three ways (`git merge-file`: the file now, the base, the proposal)
+into the working tree, and stops on a conflict for that file. The person commits the result their usual way. Accepting or rejecting
 deletes the ref and records an event.
 
 ## Scripts

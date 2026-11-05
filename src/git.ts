@@ -71,8 +71,8 @@ export interface Commit {
 }
 
 /** Commits after `since` (or all), oldest first, with paths made vault-relative. */
-export function commitsSince(repo: GitRepo, since: string | null): Commit[] {
-  const range = since ? [`${since}..HEAD`] : ['HEAD'];
+export function commitsSince(repo: GitRepo, since: string | null, head = 'HEAD'): Commit[] {
+  const range = since ? [`${since}..${head}`] : [head];
   const out = git(repo.top, ['log', '--reverse', '--format=%x1e%H%x1f%at%x1f%an%x1f%s', '--name-status', '-M', ...range]);
   const commits: Commit[] = [];
   const inVault = (file: string): string | null => {
@@ -188,7 +188,7 @@ export function listProposals(repo: GitRepo): Proposal[] {
   const out = git(repo.top, ['for-each-ref', PROPOSAL_REFS, '--sort=-creatordate', '--format=%(refname)%1f%(objectname)%1f%(subject)%1f%(authorname)%1f%(authordate:iso-strict)']);
   return out.split('\n').filter(Boolean).map((line) => {
     const [ref, commit, subject, author, time] = line.split('\x1f');
-    const files = git(repo.top, ['diff', '--name-status', `${commit}~1`, commit!]).split('\n').filter(Boolean).map((row) => {
+    const files = git(repo.top, ['diff', '--no-renames', '--name-status', `${commit}~1`, commit!]).split('\n').filter(Boolean).map((row) => {
       const [status, file] = row.split('\t');
       return { status: status!, path: file!.slice(repo.prefix.length) };
     });
@@ -198,7 +198,8 @@ export function listProposals(repo: GitRepo): Proposal[] {
 
 export function proposalDiff(repo: GitRepo, id: string): string {
   const ref = `${PROPOSAL_REFS}/${id}`;
-  return git(repo.top, ['diff', `${ref}~1`, ref]);
+  // No rename detection: a move is a deletion and an addition, and both must be seen and applied.
+  return git(repo.top, ['diff', '--no-renames', `${ref}~1`, ref]);
 }
 
 const showFile = (repo: GitRepo, commit: string, rel: string): string | null => {
@@ -220,7 +221,7 @@ export interface AcceptResult {
 export function acceptProposal(repo: GitRepo, vaultRoot: string, id: string): AcceptResult {
   const ref = `${PROPOSAL_REFS}/${id}`;
   const commit = git(repo.top, ['rev-parse', '--verify', ref]).trim();
-  const files = git(repo.top, ['diff', '--name-only', `${commit}~1`, commit]).split('\n').filter(Boolean).map((file) => file.slice(repo.prefix.length));
+  const files = git(repo.top, ['diff', '--no-renames', '--name-only', `${commit}~1`, commit]).split('\n').filter(Boolean).map((file) => file.slice(repo.prefix.length));
   const applied: string[] = [];
   const unchanged: string[] = [];
   const conflicts: string[] = [];

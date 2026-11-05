@@ -4,7 +4,7 @@
  */
 
 import { createHash } from 'node:crypto';
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
+import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { loadAccess, type AccessPolicy, type Principal, type Sensitivity, type Verb } from './access.js';
 import { loadConfig, type BrainConfig, type Kind, type Source } from './config.js';
@@ -16,7 +16,7 @@ import { refresh, type IndexContext, type RefreshStats } from './indexer.js';
 import { decay } from './memory.js';
 import { isMarkdown, nameOf, normalise } from './paths.js';
 import { aliasKey, wikiLinkTo, buildResolveIndex } from './resolve.js';
-import { loadScripts, scriptContext, type LoadedScripts } from './scripts.js';
+import { loadScripts, scriptContext, scriptsFingerprint, type LoadedScripts } from './scripts.js';
 import { indexPath, SCHEMA_VERSION, Store } from './store.js';
 import { looseExpression, matchExpression, queryPieces } from './tokenize.js';
 
@@ -120,21 +120,36 @@ export class Vault {
     this.session = session ?? newSession();
   }
 
+  /** What the index was built under: schema, config, access policy and scripts. */
+  static fingerprint(root: string): string {
+    const { text } = loadConfig(root);
+    return sha([String(SCHEMA_VERSION), text, loadAccess(root).text, scriptsFingerprint(root)].join('\0'));
+  }
+
+  /** Whether the config, the access policy or a script changed since this vault was opened. */
+  stale(): boolean {
+    return Vault.fingerprint(this.root) !== this.fingerprint;
+  }
+
   static async open(root: string, options: OpenOptions = {}): Promise<Vault> {
     const absolute = path.resolve(root);
     if (!existsSync(absolute)) throw new Error(`There is no folder at ${absolute}.`);
-    const { config, text } = loadConfig(absolute);
+    const { config } = loadConfig(absolute);
     const access = loadAccess(absolute);
     const scripts = await loadScripts(absolute);
     const principal = options.owner ? access.owner : access.principalFor(options.key);
-    const fingerprint = sha([String(SCHEMA_VERSION), text, access.text, scripts.fingerprint].join('\0'));
+    const fingerprint = Vault.fingerprint(absolute);
     const store = Store.open(indexPath(absolute));
     const vault = new Vault(absolute, store, config, access, scripts, principal, fingerprint, options.session);
     if (options.refresh !== false) vault.refresh();
     return vault;
   }
 
+  private closed = false;
+
   close(): void {
+    if (this.closed) return;
+    this.closed = true;
     this.store.close();
   }
 
@@ -194,10 +209,12 @@ export class Vault {
       () => {
         const rows = this.store.db.prepare("SELECT nid, path, title, id, kind, source, sensitivity, status, date, hash, tags, aliases FROM notes WHERE path = ? OR path LIKE ? ESCAPE '\\'")
           .all(`${clean}.md`, `%/${clean.replace(/[\\%_]/g, '\\$&')}.md`) as unknown as RawNoteRow[];
-        return rows.length === 1 ? rows[0] : rows.find((row) => row.kind === 'card');
+        const visible = rows.filter((row) => this.canSee(row));
+        return visible.length === 1 ? visible[0] : visible.find((row) => row.kind === 'card');
       },
       () => {
-        const rows = this.store.db.prepare('SELECT nid, path, title, id, kind, source, sensitivity, status, date, hash, tags, aliases FROM notes WHERE lower(title) = lower(?)').all(ref.trim()) as unknown as RawNoteRow[];
+        const rows = (this.store.db.prepare('SELECT nid, path, title, id, kind, source, sensitivity, status, date, hash, tags, aliases FROM notes WHERE lower(title) = lower(?)').all(ref.trim()) as unknown as RawNoteRow[])
+          .filter((row) => this.canSee(row));
         return rows.length === 1 ? rows[0] : undefined;
       },
     ];
@@ -244,6 +261,7 @@ export class Vault {
   }
 
   backlinks(rel: string): { path: string; title: string; relation: string | null }[] {
+    this.requireVerb('read');
     const rows = this.store.db.prepare(`SELECT DISTINCT l.src AS path, n.title, n.sensitivity, l.relation FROM links l JOIN notes n ON n.path = l.src
       WHERE l.resolved = ? AND l.src != ? ORDER BY n.path`).all(rel, rel) as { path: string; title: string; sensitivity: Sensitivity; relation: string | null }[];
     return rows.filter((row) => this.canSee(row)).map(({ path: src, title, relation }) => ({ path: src, title, relation }));
@@ -257,7 +275,7 @@ export class Vault {
       if (!expression) return [];
       return this.store.db.prepare(`SELECT n.nid, n.path, n.title, n.id, n.kind, n.source, n.sensitivity, n.status, n.date, n.hash, n.tags, n.aliases,
           bm25(fts, 8.0, 3.0, 1.0) AS rank
-        FROM fts JOIN notes n ON n.nid = fts.rowid WHERE fts MATCH ? ORDER BY rank LIMIT ?`).all(expression, Math.max(200, limit * 5)) as unknown as (RawNoteRow & { rank: number })[];
+        FROM fts JOIN notes n ON n.nid = fts.rowid WHERE fts MATCH ? ORDER BY rank LIMIT ?`).all(expression, Math.max(this.principal.owner ? 200 : 2000, limit * 5)) as unknown as (RawNoteRow & { rank: number })[];
     };
     let rows = run(options.mode ?? 'all');
     if (rows.length === 0 && (options.mode ?? 'all') === 'all') rows = run('any');
@@ -306,12 +324,15 @@ export class Vault {
 
   /** Whether a note has been superseded: a note says it supersedes this one, or this one says what superseded it. */
   isSuperseded(rel: string): boolean {
-    const row = this.store.db.prepare(`SELECT 1 FROM links WHERE (resolved = ? AND relation = 'supersedes') OR (src = ? AND relation = 'superseded_by' AND resolved IS NOT NULL) LIMIT 1`).get(rel, rel);
-    return row !== undefined || this.noteRow(rel)?.status === 'superseded';
+    // Only by a note this principal can see: a hidden successor says nothing it may hear.
+    const rows = this.store.db.prepare(`SELECT n.path, n.sensitivity FROM links l JOIN notes n ON n.path = CASE WHEN l.relation = 'supersedes' THEN l.src ELSE l.resolved END
+      WHERE (l.resolved = ? AND l.relation = 'supersedes') OR (l.src = ? AND l.relation = 'superseded_by' AND l.resolved IS NOT NULL)`).all(rel, rel) as { path: string; sensitivity: Sensitivity }[];
+    return rows.some((row) => this.canSee(row)) || this.noteRow(rel)?.status === 'superseded';
   }
 
   /** Where an id, alias or name lives now. */
   where(ref: string): { path: string; folder: string; title: string; kind: Kind; via: string } | null {
+    this.requireVerb('read');
     const key = aliasKey(ref);
     const row = this.store.db.prepare(`SELECT a.path, a.origin FROM aliases a JOIN notes n ON n.path = a.path WHERE a.key = ?
       ORDER BY n.kind = 'card' DESC, a.origin = 'id' DESC LIMIT 1`).get(key) as { path: string; origin: string } | undefined;
@@ -321,6 +342,7 @@ export class Vault {
   }
 
   status(): Record<string, unknown> {
+    this.requireVerb('read');
     const count = (sql: string) => (this.store.db.prepare(sql).get() as { n: number }).n;
     const kinds = this.store.db.prepare('SELECT kind, count(*) AS n FROM notes GROUP BY kind ORDER BY n DESC').all() as { kind: string; n: number }[];
     return {
@@ -350,6 +372,7 @@ export class Vault {
   // ---------- graph ----------
 
   graph(options: { minWeight?: number; types?: readonly string[] } = {}): GraphExport {
+    this.requireVerb('search');
     const now = Date.now();
     const at = Number(this.store.meta('weights_at') ?? now);
     const rows = this.store.db.prepare('SELECT nid, path, title, id, kind, source, sensitivity, status, date, hash, tags, aliases FROM notes').all() as unknown as RawNoteRow[];
@@ -402,10 +425,53 @@ export class Vault {
     return clean;
   }
 
+  /**
+   * The path as the disk spells it, following each folder by name, in any
+   * case, as a case-insensitive disk would. A symbolic link is not followed
+   * for anyone but the owner: it could lead out of the vault.
+   */
+  private onDisk(clean: string): string {
+    const parts = clean.split('/');
+    const out: string[] = [];
+    let dir = this.root;
+    for (const [index, part] of parts.entries()) {
+      let names: string[];
+      try { names = readdirSync(dir); } catch { out.push(...parts.slice(index)); break; }
+      const wanted = part.normalize('NFC').toLowerCase();
+      const name = names.includes(part) ? part : names.find((entry) => entry.normalize('NFC').toLowerCase() === wanted);
+      if (!name) { out.push(...parts.slice(index)); break; }
+      const full = path.join(dir, name);
+      if (lstatSync(full).isSymbolicLink()) throw new AccessError(`${clean} goes through a link, which is not followed.`);
+      out.push(name);
+      dir = full;
+    }
+    return out.join('/');
+  }
+
+  /**
+   * A path a principal other than the owner means to change, as the disk
+   * spells it, and only if they could see the note there. Dot folders and
+   * anything else the index leaves out are outside what they can see.
+   */
+  private guardPath(rel: string): string {
+    const clean = this.checkPath(rel);
+    if (this.principal.owner) return clean;
+    if (clean.split('/').some((part) => part.startsWith('.') || part === 'node_modules')) {
+      throw new AccessError(`${this.principal.name} may not change ${clean}.`);
+    }
+    const real = this.onDisk(clean);
+    const exists = existsSync(path.join(this.root, real));
+    const row = this.noteRow(real);
+    if (exists ? !row || !this.canSee(row) : !this.principal.canSee(real, this.access.sensitivityOf(real))) {
+      throw new AccessError(`${this.principal.name} may not change ${clean}.`);
+    }
+    return real;
+  }
+
   /** Replace or create a note, given the hash it was read at (null to create one that is not there). */
   write(rel: string, content: string, baseHash: string | null): { path: string; hash: string } {
     this.requireVerb('write');
-    const clean = this.checkPath(rel);
+    const clean = this.guardPath(rel);
     if (!this.principal.canWrite(clean)) throw new AccessError(`${this.principal.name} may not write ${clean}; propose the change instead.`);
     const current = this.textOf(clean);
     const currentHash = current === null ? null : sha(current);
@@ -420,7 +486,7 @@ export class Vault {
   append(text: string, options: { to?: string; now?: Date } = {}): { path: string } {
     this.requireVerb('append');
     const now = options.now ?? new Date();
-    const rel = this.checkPath(options.to ?? datedPath(this.config.append.path, now));
+    const rel = this.guardPath(options.to ?? datedPath(this.config.append.path, now));
     if (!this.principal.canAppend(rel)) throw new AccessError(`${this.principal.name} may not append to ${rel}.`);
     const stamp = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
     const who = this.principal.owner ? '' : ` · ${this.principal.name}`;
@@ -496,14 +562,7 @@ export class Vault {
   propose(changes: readonly FileChange[], message: string): { id: string; files: string[] } {
     this.requireVerb('propose');
     const repo = this.requireRepo();
-    const clean = changes.map((change) => ({ path: this.checkPath(change.path), content: change.content }));
-    for (const change of clean) {
-      const note = this.noteRow(change.path);
-      if (note && !this.canSee(note)) throw new AccessError(`${this.principal.name} may not see ${change.path}.`);
-      if (!this.principal.owner && !this.principal.canSee(change.path, this.access.sensitivityOf(change.path))) {
-        throw new AccessError(`${this.principal.name} may not change ${change.path}.`);
-      }
-    }
+    const clean = changes.map((change) => ({ path: this.guardPath(change.path), content: change.content }));
     const author = this.principal.owner
       ? { name: 'owner', email: 'owner@noto.local' }
       : { name: this.principal.name, email: `${this.principal.name}@noto.local` };
@@ -512,12 +571,17 @@ export class Vault {
     return { id, files: clean.map((change) => change.path) };
   }
 
+  /** The proposals waiting: all of them for the owner, one's own for anyone else. */
   proposals(): Proposal[] {
     const repo = this.repo;
-    return repo ? listProposals(repo) : [];
+    const all = repo ? listProposals(repo) : [];
+    return this.principal.owner ? all : all.filter((proposal) => proposal.author === this.principal.name);
   }
 
   proposalDiff(id: string): string {
+    if (!this.principal.owner && !this.proposals().some((proposal) => proposal.id === id)) {
+      throw new AccessError(`${this.principal.name} may only see its own proposals.`);
+    }
     return proposalDiff(this.requireRepo(), id);
   }
 
