@@ -22,8 +22,10 @@ noto-vault init          # .noto/brain.yaml, .noto/access.yaml, .noto/scripts/
 noto-vault index         # about 9 s for 8,000 notes the first time, under 100 ms after
 noto-vault recall "what did we decide about index names"
 noto-vault search 改造方案
-noto-vault suggest       # links the notes are missing
-noto-vault suggest --propose --limit 30   # the strongest, as a proposal to review
+noto-vault suggest       # links the notes are missing, each with an id
+noto-vault suggest --review               # one at a time: link it, never, skip; then apply the yes
+noto-vault suggest --propose <id...>      # or name them, as a proposal to review
+noto-vault suggest --dismiss <id...>      # never suggest these again
 noto-vault proposals show <id>
 noto-vault proposals accept <id>
 noto-vault graph --out graph.json         # nodes with heat, edges with weights

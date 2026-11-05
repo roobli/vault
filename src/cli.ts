@@ -7,13 +7,14 @@
 import { randomBytes } from 'node:crypto';
 import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
+import { createInterface } from 'node:readline/promises';
 import { parseArgs } from 'node:util';
 import { accessPath, keyHash } from './access.js';
 import { configPath } from './config.js';
-import { formatRead, formatRecall, formatSearch, formatSuggestions } from './format.js';
+import { formatRead, formatRecall, formatSearch, formatSuggestion, formatSuggestions, plainEmphasis, terminalEmphasis } from './format.js';
 import { serve } from './mcp.js';
 import { recall } from './recall.js';
-import { suggest, toChanges, type SuggestionType } from './suggest.js';
+import { dismiss, suggest, toChanges, type Suggestion, type SuggestionType } from './suggest.js';
 import { AccessError, ConflictError, Vault } from './vault.js';
 import { parseYaml } from './yaml.js';
 
@@ -30,7 +31,9 @@ const HELP = `noto-vault: a vault of Markdown notes as memory
   noto-vault visit <note> [--from n]    record that you opened a note
   noto-vault graph [--out file]         nodes and edges as JSON  [--types a,b] [--min w]
   noto-vault suggest                    links that are missing  [--types mention,together,stale,script] [--from note] [--limit n]
-                                        [--propose [--message m]] write them as a proposal instead of listing them
+  noto-vault suggest --review           go through them one by one: link it, never, skip; then apply the yes
+  noto-vault suggest --propose [id...]  the named ones (or the strongest --limit) as a proposal  [--message m]
+  noto-vault suggest --dismiss <id...>  never suggest these again (kept in .noto/dismissed.jsonl)
   noto-vault proposals [show|accept|reject <id>]
   noto-vault append <text...>           a dated entry in today's log  [--to note]   (text "-" reads stdin)
   noto-vault write <note> --base <hash> the note's new text from stdin  (--base new to create)
@@ -113,7 +116,7 @@ async function main(argv: string[]): Promise<number> {
     options: {
       root: { type: 'string' }, json: { type: 'boolean' }, full: { type: 'boolean' }, limit: { type: 'string' }, kind: { type: 'string' },
       folder: { type: 'string' }, from: { type: 'string' }, budget: { type: 'string' }, out: { type: 'string' }, types: { type: 'string' },
-      min: { type: 'string' }, propose: { type: 'boolean' }, message: { type: 'string' }, to: { type: 'string' }, base: { type: 'string' },
+      min: { type: 'string' }, propose: { type: 'boolean' }, review: { type: 'boolean' }, dismiss: { type: 'boolean' }, message: { type: 'string' }, to: { type: 'string' }, base: { type: 'string' },
       rel: { type: 'string' }, owner: { type: 'boolean' }, k: { type: 'string' }, search: { type: 'boolean' }, meta: { type: 'boolean' },
       help: { type: 'boolean', short: 'h' },
     },
@@ -260,25 +263,39 @@ async function main(argv: string[]): Promise<number> {
         return 0;
       }
       case 'suggest': {
-        const limit = number(values.limit, values.propose ? 30 : undefined);
-        const found = suggest(vault, {
+        const options = {
           ...(typeof values.types === 'string' ? { types: values.types.split(',') as SuggestionType[] } : {}),
           ...(typeof values.from === 'string' ? { from: [values.from] } : {}),
-          ...(limit ? { limit } : {}),
-        });
-        if (values.propose) {
-          if (found.length === 0) { console.log('No links seem to be missing.'); return 0; }
-          const changes = toChanges(vault, found);
-          const message = typeof values.message === 'string' ? values.message : `Add ${found.length} links the notes are missing`;
-          const result = vault.propose(changes, message);
-          print(result, () => `Proposed ${found.length} links in ${result.files.length} notes as ${result.id}.\nReview: noto-vault proposals show ${result.id}\nAccept: noto-vault proposals accept ${result.id}`);
+        };
+        const found = suggest(vault, options);
+        const emphasis = process.stdout.isTTY && !process.env.NO_COLOR ? terminalEmphasis : plainEmphasis;
+        if (values.review) return await review(vault, found.slice(0, number(values.limit, found.length)), emphasis);
+        // Ids name suggestions; an id stands for every suggestion of its kind between its two notes.
+        const named = (ids: readonly string[]): Suggestion[] => {
+          const unknown = ids.filter((id) => !found.some((item) => item.id === id));
+          if (unknown.length > 0) throw new UsageError(`No suggestion has the id ${unknown.join(', ')}. noto-vault suggest lists them.`);
+          return found.filter((item) => ids.includes(item.id));
+        };
+        if (values.dismiss) {
+          if (rest.length === 0) throw new UsageError('suggest --dismiss needs the ids to dismiss.');
+          const count = dismiss(vault, named(rest));
+          console.log(`Dismissed ${count}; they will not be suggested again. The list is .noto/dismissed.jsonl.`);
           return 0;
         }
+        if (values.propose) {
+          const chosen = rest.length > 0 ? named(rest) : found.slice(0, number(values.limit, 30));
+          if (chosen.length === 0) { console.log('No links seem to be missing.'); return 0; }
+          const result = vault.propose(toChanges(vault, chosen), typeof values.message === 'string' ? values.message : `Add ${chosen.length} links the notes are missing`);
+          print(result, () => `Proposed ${chosen.length} links in ${result.files.length} notes as ${result.id}.\nReview: noto-vault proposals show ${result.id}\nAccept: noto-vault proposals accept ${result.id}`);
+          return 0;
+        }
+        const limit = number(values.limit, 40)!;
         print(found, () => {
-          const shown = found.slice(0, limit ?? 40);
+          const shown = found.slice(0, limit);
           const counts = Object.entries(found.reduce<Record<string, number>>((all, item) => ({ ...all, [item.type]: (all[item.type] ?? 0) + 1 }), {}))
             .map(([type, n]) => `${n} ${type}`).join(', ');
-          return `${formatSuggestions(shown)}${found.length > shown.length ? `\n\n${found.length} in all (${counts}); the strongest ${shown.length} are above. --limit shows more, --json gives all.` : ''}`;
+          const more = found.length > shown.length ? `\n\n${found.length} in all (${counts}); the strongest ${shown.length} are above. --limit shows more, --json gives all.` : '';
+          return `${formatSuggestions(shown, emphasis)}${more}${found.length > 0 ? '\n\nTo apply: noto-vault suggest --review, or --propose <id...>; --dismiss <id...> to never see one again.' : ''}`;
         });
         return 0;
       }
@@ -351,6 +368,58 @@ async function main(argv: string[]): Promise<number> {
 }
 
 class UsageError extends Error {}
+
+/**
+ * One question per suggestion, strongest first. The yes ones become one
+ * proposal and, if the person says so, are applied at once the way accepting
+ * it would; the no ones are dismissed. Stopping keeps what was answered;
+ * Ctrl-C keeps nothing.
+ */
+async function review(vault: Vault, items: readonly Suggestion[], emphasis: (text: string) => string): Promise<number> {
+  if (!process.stdin.isTTY || !process.stdout.isTTY) {
+    throw new UsageError('--review asks a question per suggestion, so it needs a terminal. Without one: suggest --propose <id...> and --dismiss <id...>.');
+  }
+  if (items.length === 0) { console.log('No links seem to be missing.'); return 0; }
+  const prompt = createInterface({ input: process.stdin, output: process.stdout });
+  let aborted = false;
+  prompt.on('SIGINT', () => { aborted = true; prompt.close(); });
+  const ask = async (question: string): Promise<string | null> => {
+    try { return (await prompt.question(question)).trim().toLowerCase(); } catch { return null; }
+  };
+  const yes: Suggestion[] = [];
+  const no: Suggestion[] = [];
+  try {
+    walk: for (const [index, item] of items.entries()) {
+      console.log(`\n${index + 1}/${items.length}  ${formatSuggestion(item, emphasis)}`);
+      for (;;) {
+        const answer = await ask('Link it? [y] yes  [n] no, never again  [s] skip  [q] stop: ');
+        if (answer === null) break walk;
+        const letter = answer[0] ?? 's';
+        if (letter === 'y') { yes.push(item); break; }
+        if (letter === 'n') { no.push(item); break; }
+        if (letter === 's') break;
+        if (letter === 'q') break walk;
+      }
+    }
+    if (aborted) { console.log('\nStopped; nothing was changed.'); return 130; }
+    if (no.length > 0) console.log(`\nDismissed ${dismiss(vault, no)}; they will not be suggested again (.noto/dismissed.jsonl).`);
+    if (yes.length === 0) { console.log('Nothing to link.'); return 0; }
+    const proposal = vault.propose(toChanges(vault, yes), `Link ${yes.length} notes to the notes they name`);
+    const now = await ask(`Apply ${yes.length === 1 ? 'the link' : `the ${yes.length} links`} to your notes now? [Y/n] `);
+    if (now === null || now.startsWith('n')) {
+      console.log(`Kept as proposal ${proposal.id}.\nReview: noto-vault proposals show ${proposal.id}\nAccept: noto-vault proposals accept ${proposal.id}`);
+      return 0;
+    }
+    const result = vault.accept(proposal.id);
+    console.log([
+      `Linked in ${result.applied.length} ${result.applied.length === 1 ? 'note' : 'notes'}.`,
+      result.conflicts.length > 0 ? `Changed since, left as they are: ${result.conflicts.join(', ')}. Proposal ${proposal.id} keeps them.` : 'Review with git diff and commit as usual.',
+    ].join(' '));
+    return 0;
+  } finally {
+    prompt.close();
+  }
+}
 
 interface EvalCase { query: string; expect: string[]; note?: string }
 

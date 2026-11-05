@@ -30,11 +30,24 @@ export function formatRecall(pack: RecallPack): string {
   return `${blocks.join('\n\n')}${tail}`;
 }
 
-export function formatSuggestions(items: readonly Suggestion[]): string {
+/** How a mention stands out in its line: bold and underlined on a terminal, in brackets elsewhere. */
+export type Emphasis = (text: string) => string;
+export const plainEmphasis: Emphasis = (text) => `«${text}»`;
+export const terminalEmphasis: Emphasis = (text) => `\u001b[1;4m${text}\u001b[0m`;
+
+export function formatSuggestion(item: Suggestion, emphasis: Emphasis = plainEmphasis): string {
+  const where = item.line ? `:${item.line}` : '';
+  const quoted = item.around ? `${item.around[0]}${emphasis(item.around[1])}${item.around[2]}` : item.context;
+  const change = item.splice ? `→ ${item.splice.replacement}` : `→ add "- ${item.relation ?? 'related'} [[${item.toTitle}]]"`;
+  return [
+    `[${item.type} ${item.id}] ${item.from}${where}`,
+    `   ${item.reason}${quoted ? `: "${quoted}"` : ''}`,
+    `   ${change}`,
+    `   to ${item.to} (${item.toTitle})`,
+  ].join('\n');
+}
+
+export function formatSuggestions(items: readonly Suggestion[], emphasis: Emphasis = plainEmphasis): string {
   if (items.length === 0) return 'No links seem to be missing.';
-  return items.map((item, index) => {
-    const where = item.line ? `:${item.line}` : '';
-    const change = item.splice ? `  → ${item.splice.replacement}` : `  → add "- ${item.relation ?? 'related'} [[${item.toTitle}]]"`;
-    return `${index + 1}. [${item.type}] ${item.from}${where}\n   to ${item.to} (${item.toTitle})\n   ${item.reason}${item.context ? `\n   "${item.context}"` : ''}\n${change}`;
-  }).join('\n');
+  return items.map((item, index) => `${index + 1}. ${formatSuggestion(item, emphasis)}`).join('\n');
 }

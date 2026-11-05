@@ -27,6 +27,7 @@ rebuilds it from the files.
     access.yaml         who may read and write what (tracked)
     scripts/*.mjs       the vault's own rules, as hooks (tracked)
     events/<host>/<yyyy-mm>.jsonl   reads and visits, append-only (tracked by choice)
+    dismissed.jsonl     suggestions the person said no to (tracked)
     index.sqlite        the index (ignored; delete it at any time)
 ```
 
@@ -228,6 +229,37 @@ addition, and the reviewer sees and the accept applies both. Accepting merges
 each file three ways (`git merge-file`: the file now, the base, the proposal)
 into the working tree, and stops on a conflict for that file. The person commits the result their usual way. Accepting or rejecting
 deletes the ref and records an event.
+
+## Suggestions
+
+`suggest` finds the links a vault is missing: a note that names another by
+its title, a card's id or an alias without linking it (`mention`); two notes
+opened or changed together again and again with no link between them
+(`together`); a link that reaches its note only through an old path
+(`stale`); and whatever the scripts add. Each has an id, the first seven hex
+digits of the SHA-1 of its type, its note and its target, so the same
+suggestion has the same id on every run.
+
+A mention is weighed by how distinctive the name is, how many notes use it,
+and how near the two notes sit: notes sharing two or more folders are near,
+one folder counts 0.8, none 0.45, because across areas a title is as often an
+ordinary phrase that is some other note's title. A day's log, and a card
+named by an id or alias written in its frontmatter, are never further than
+0.8. A title with Chinese running on into it on both sides counts 0.6. Only
+running text is read: not frontmatter, headings, code, links (labels
+included), URLs or paths.
+
+Nothing is applied until the person says so: `suggest --review` asks about
+each, strongest first, then makes the yes into one proposal and applies it
+if asked; `--propose <id...>` makes a proposal; `--dismiss <id...>` says no.
+A no is a line in `.noto/dismissed.jsonl`:
+
+```json
+{"type":"mention","from":"A/B.md","to":"C/D.md","time":"2026-11-05T10:45:40.247Z"}
+```
+
+The file holds the type and both paths, not the id, so it reads without this
+package; a dismissal lapses when either note moves.
 
 ## Scripts
 

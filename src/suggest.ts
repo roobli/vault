@@ -11,10 +11,13 @@
  * - `stale`: a link still reaches its note only through an old path or name
  *   from git's renames. The fix writes the link the way the note is called now.
  *
- * Nothing here writes. `toChanges` turns accepted suggestions into file
- * changes, which the caller writes or proposes.
+ * Nothing here writes notes. `toChanges` turns accepted suggestions into file
+ * changes, which the caller writes or proposes. A suggestion the person says
+ * no to is kept in `.noto/dismissed.jsonl` and not made again.
  */
 
+import { createHash } from 'node:crypto';
+import { appendFileSync, mkdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import type { Kind } from './config.js';
 import type { Sensitivity } from './access.js';
@@ -26,11 +29,16 @@ import { dirOf, nameOf } from './paths.js';
 import { buildResolveIndex, wikiLinkTo } from './resolve.js';
 import { hasCjk } from './tokenize.js';
 import { scriptContext } from './scripts.js';
-import type { Vault } from './vault.js';
+import { AccessError, type Vault } from './vault.js';
 
 export type SuggestionType = 'mention' | 'together' | 'stale' | 'script';
 
 export interface Suggestion {
+  /**
+   * Short and stable: the same kind of suggestion between the same two notes
+   * has the same id on every run, so it can be named to accept or dismiss.
+   */
+  readonly id: string;
   readonly type: SuggestionType;
   readonly from: string;
   readonly to: string;
@@ -39,8 +47,10 @@ export interface Suggestion {
   readonly reason: string;
   /** 1-based line of the mention or the stale link. */
   readonly line?: number;
-  /** The text around it. */
+  /** The text around it, on its line. */
   readonly context?: string;
+  /** The same text in three parts: before the mention, the mention, after it. */
+  readonly around?: readonly [string, string, string];
   /** The exact change in `from`, for mentions and stale links. */
   readonly splice?: Splice;
   /** The relation a `together` or script suggestion adds. */
@@ -52,6 +62,8 @@ export interface SuggestOptions {
   /** Only suggestions from these notes. */
   readonly from?: readonly string[];
   readonly limit?: number;
+  /** Include what the person dismissed. */
+  readonly dismissed?: boolean;
 }
 
 interface NoteLite {
@@ -150,10 +162,67 @@ const lowerKeepLength = (text: string): string => {
 
 const isWordChar = (ch: string | undefined): boolean => ch !== undefined && /[A-Za-z0-9_]/.test(ch);
 
+export function suggestionId(type: SuggestionType, from: string, to: string): string {
+  return createHash('sha1').update(`${type}\0${from}\0${to}`).digest('hex').slice(0, 7);
+}
+
+const dismissedPath = (root: string) => path.join(root, '.noto', 'dismissed.jsonl');
+
+/**
+ * The ids of the suggestions the person said no to. The file keeps the type
+ * and both paths, not the id, so it reads without this code.
+ * yagni: a dismissal is by path, so it lapses when either note moves; key it
+ * by the note's id or content hash if moves turn out to bring them back.
+ */
+function dismissedIds(root: string): Set<string> {
+  const ids = new Set<string>();
+  let text: string;
+  try { text = readFileSync(dismissedPath(root), 'utf8'); } catch { return ids; }
+  for (const line of text.split('\n')) {
+    if (!line.trim()) continue;
+    try {
+      const entry = JSON.parse(line) as { type?: SuggestionType; from?: string; to?: string };
+      if (entry.type && entry.from && entry.to) ids.add(suggestionId(entry.type, entry.from, entry.to));
+    } catch { /* A line someone broke by hand says nothing; the rest still count. */ }
+  }
+  return ids;
+}
+
+/** Say no to suggestions, for good. Only the owner writes under `.noto/`. */
+export function dismiss(vault: Vault, items: readonly Suggestion[]): number {
+  if (!vault.principal.owner) throw new AccessError(`${vault.principal.name} may not dismiss suggestions; only the owner writes under .noto/.`);
+  const known = dismissedIds(vault.root);
+  const time = new Date().toISOString();
+  const lines = items.filter((item) => !known.has(item.id) && known.add(item.id))
+    .map((item) => JSON.stringify({ type: item.type, from: item.from, to: item.to, time }));
+  if (lines.length === 0) return 0;
+  mkdirSync(path.dirname(dismissedPath(vault.root)), { recursive: true });
+  appendFileSync(dismissedPath(vault.root), `${lines.join('\n')}\n`);
+  return lines.length;
+}
+
+/**
+ * How near two notes sit. Inside one area a title is usually the note's name;
+ * across areas it is as often an ordinary phrase that happens to be a title
+ * somewhere else (一些思考, 工程规范), so it counts for less. A day's log names
+ * whatever the day touched, and a card's written id or alias is a name someone
+ * gave it to be called by, so neither is far. A card's title is not enough: a
+ * folder's index is called what the folder is, and 设计与方案 is many folders.
+ */
+function nearness(from: NoteLite, to: NoteLite, named: boolean): number {
+  const a = dirOf(from.path).split('/').filter(Boolean);
+  const b = dirOf(to.path).split('/').filter(Boolean);
+  let shared = 0;
+  while (shared < a.length && shared < b.length && a[shared] === b[shared]) shared++;
+  const near = shared >= 2 ? 1 : shared === 1 ? 0.8 : 0.45;
+  return from.kind === 'log' || named ? Math.max(near, 0.8) : near;
+}
+
 export function suggest(vault: Vault, options: SuggestOptions = {}): Suggestion[] {
   vault.requireVerb('search');
   const db = vault.store.db;
   const types = new Set(options.types ?? ['mention', 'together', 'stale', 'script']);
+  const hidden = options.dismissed ? new Set<string>() : dismissedIds(vault.root);
   const notes = (db.prepare('SELECT path, title, kind, source, sensitivity, aliases, id FROM notes').all() as
     { path: string; title: string; kind: Kind; source: string | null; sensitivity: Sensitivity; aliases: string; id: string | null }[])
     .map((row) => ({ ...row, aliases: JSON.parse(row.aliases) as string[] }))
@@ -199,7 +268,7 @@ export function suggest(vault: Vault, options: SuggestOptions = {}): Suggestion[
       if (fromSet && !fromSet.has(from.path)) continue;
       const how = [...pair.types].map((type) => (type === 'visit' ? 'opened one after the other' : 'changed in the same commits')).join(' and ');
       out.push({
-        type: 'together', from: from.path, to: to.path, toTitle: to.title, relation: 'related',
+        id: suggestionId('together', from.path, to.path), type: 'together', from: from.path, to: to.path, toTitle: to.title, relation: 'related',
         score: Math.round(Math.min(3, pair.weight) * 100) / 100,
         reason: `${how} ${pair.count} times, with no link between them`,
       });
@@ -232,7 +301,7 @@ export function suggest(vault: Vault, options: SuggestOptions = {}): Suggestion[
         replacement = `[${row.label ?? ''}](${where.replace(/ /g, '%20')}${row.anchor})`;
       }
       out.push({
-        type: 'stale', from: from.path, to: to.path, toTitle: to.title, line: row.line,
+        id: suggestionId('stale', from.path, to.path), type: 'stale', from: from.path, to: to.path, toTitle: to.title, line: row.line,
         score: 2, reason: `the link names "${row.target}", which is where the note used to be`,
         splice: { start: row.start, end: row.end, replacement },
       });
@@ -252,7 +321,7 @@ export function suggest(vault: Vault, options: SuggestOptions = {}): Suggestion[
           const to = vault.find(item.target);
           if (!to || to.path === note.path || links(note.path, to.path)) continue;
           out.push({
-            type: 'script', from: note.path, to: to.path, toTitle: to.title, relation: item.relation ?? 'related',
+            id: suggestionId('script', note.path, to.path), type: 'script', from: note.path, to: to.path, toTitle: to.title, relation: item.relation ?? 'related',
             score: item.score ?? 1, reason: `${script.name ?? 'a script'}: ${item.reason}`,
           });
         }
@@ -260,8 +329,9 @@ export function suggest(vault: Vault, options: SuggestOptions = {}): Suggestion[
     }
   }
 
-  out.sort((left, right) => right.score - left.score || left.from.localeCompare(right.from));
-  return options.limit ? out.slice(0, options.limit) : out;
+  const kept = out.filter((item) => !hidden.has(item.id));
+  kept.sort((left, right) => right.score - left.score || left.from.localeCompare(right.from));
+  return options.limit ? kept.slice(0, options.limit) : kept;
 }
 
 function mentions(vault: Vault, sources: readonly NoteLite[], notes: readonly NoteLite[], links: (a: string, b: string) => boolean, heat: (rel: string) => number): Suggestion[] {
@@ -311,7 +381,11 @@ function mentions(vault: Vault, sources: readonly NoteLite[], notes: readonly No
     masked = ' '.repeat(frontmatter.length) + masked.slice(frontmatter.length);
     masked = masked.replace(/^#{1,6} .*$/gm, (line) => ' '.repeat(line.length));
     // Links, tags, URLs and file paths written as text: none of them is prose naming a note.
-    masked = masked.replace(/!?\[\[[^\]\n]*\]\]|!?\[[^\]\n]*\]\([^)\n]*\)|<[^>\n]+>|https?:\/\/\S+|[^\s()（）"'`]*\/[^\s()（）"'`]*|\S+\.(?:md|markdown)\b/g, (link) => ' '.repeat(link.length));
+    // Links go first and whole: a path matched from the prose before one would
+    // swallow its opening brackets and leave the label to be read as prose.
+    const blank = (part: string) => ' '.repeat(part.length);
+    masked = masked.replace(/!?\[\[[^\]\n]*\]\]|!?\[[^\]\n]*\]\([^)\n]*\)|<[^>\n]+>|https?:\/\/\S+/g, blank);
+    masked = masked.replace(/[^\s()（）"'`[\]|，。、；：！？「」《》]*\/[^\s()（）"'`[\]|，。、；：！？「」《》]*|\S+\.(?:md|markdown)\b/g, blank);
     const lower = lowerKeepLength(masked);
     const hits: [number, number, number][] = [];
     for (const hit of matcher.scan(lower)) {
@@ -356,11 +430,20 @@ function mentions(vault: Vault, sources: readonly NoteLite[], notes: readonly No
     // In a table row a label's `|` would end the cell, and the escaped form is not a link to the vault's tools.
     if (replacement.includes('|') && /^\s*\|/.test(text.slice(lineStart, start))) continue;
     const line = text.slice(0, start).split('\n').length;
+    const stop = lineEnd < 0 ? text.length : lineEnd;
+    const head = text.slice(Math.max(lineStart, start - 60), start);
+    const tail = text.slice(end, Math.min(stop, end + 60));
+    const around = [`${start - 60 > lineStart ? '…' : ''}${head.trimStart()}`, written, `${tail.trimEnd()}${end + 60 < stop ? '…' : ''}`] as const;
+    // Inside a run of Chinese on both sides, a title is as often part of a
+    // longer phrase as a name for the note: 强化学习方案, 执行计划学习探讨.
+    const embedded = hasCjk(written[0]!) && hasCjk(written[written.length - 1]!) && hasCjk(text[start - 1] ?? '') && hasCjk(text[end] ?? '');
     out.push({
-      type: 'mention', from: from.path, to: to.path, toTitle: to.title, line,
-      context: text.slice(lineStart, lineEnd < 0 ? text.length : lineEnd).trim().slice(0, 200),
+      id: suggestionId('mention', from.path, to.path), type: 'mention', from: from.path, to: to.path, toTitle: to.title, line,
+      context: around.join(''),
+      around,
       // A page of a copied handbook is a weaker target than one's own note.
-      score: Math.round(target.weight * (card ? 1.3 : 1) * (to.source === 'heard' ? 0.6 : 1) * (1 + 0.1 * Math.log1p(heat(to.path))) / Math.max(1, Math.log2(1 + frequency)) * 100) / 100,
+      score: Math.round(target.weight * (card ? 1.3 : 1) * (to.source === 'heard' ? 0.6 : 1) * (1 + 0.1 * Math.log1p(heat(to.path)))
+        * nearness(from, to, card) * (embedded ? 0.6 : 1) / Math.max(1, Math.log2(1 + frequency)) * 100) / 100,
       reason: `mentions "${written}" without linking to it`,
       splice: { start, end, replacement },
     });
