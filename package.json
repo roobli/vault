@@ -1,0 +1,41 @@
+{
+  "name": "@roobli/vault",
+  "version": "0.1.0",
+  "description": "A vault of plain Markdown notes as memory for people and agents: one link resolver, a rebuildable index, scoped access, and recall.",
+  "license": "MIT",
+  "type": "module",
+  "author": "roobli",
+  "packageManager": "pnpm@11.18.0",
+  "files": [
+    "dist",
+    "bin"
+  ],
+  "bin": {
+    "noto-vault": "bin/noto-vault.mjs"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./events": {
+      "types": "./dist/events.d.ts",
+      "import": "./dist/events.js"
+    }
+  },
+  "engines": {
+    "node": ">=22.13.0"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "prepare": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "verify": "pnpm typecheck && pnpm test && pnpm build"
+  },
+  "devDependencies": {
+    "@types/node": "^24.13.3",
+    "typescript": "^5.9.2",
+    "vitest": "^4.1.11"
+  }
+}
