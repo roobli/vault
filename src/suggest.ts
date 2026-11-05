@@ -202,7 +202,7 @@ export function dismiss(vault: Vault, items: readonly Suggestion[]): number {
 }
 
 /**
- * How near two notes sit. Inside one area a title is usually the note's name;
+ * How near two notes sit. In one folder, or inside one area, a title is usually the note's name;
  * across areas it is as often an ordinary phrase that happens to be a title
  * somewhere else (一些思考, 工程规范), so it counts for less. A day's log names
  * whatever the day touched, and a card's written id or alias is a name someone
@@ -210,6 +210,7 @@ export function dismiss(vault: Vault, items: readonly Suggestion[]): number {
  * folder's index is called what the folder is, and 设计与方案 is many folders.
  */
 function nearness(from: NoteLite, to: NoteLite, named: boolean): number {
+  if (dirOf(from.path) === dirOf(to.path)) return 1;
   const a = dirOf(from.path).split('/').filter(Boolean);
   const b = dirOf(to.path).split('/').filter(Boolean);
   let shared = 0;

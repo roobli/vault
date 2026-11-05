@@ -30,7 +30,7 @@ const HELP = `noto-vault: a vault of Markdown notes as memory
   noto-vault where <id or name>         where a project or note lives now
   noto-vault visit <note> [--from n]    record that you opened a note
   noto-vault graph [--out file]         nodes and edges as JSON  [--types a,b] [--min w]
-  noto-vault suggest                    links that are missing  [--types mention,together,stale,script] [--from note] [--limit n]
+  noto-vault suggest                    links that are missing  [--types mention,together,stale,script] [--from note] [--limit n, also for --json]
   noto-vault suggest --review           go through them one by one: link it, never, skip; then apply the yes
   noto-vault suggest --propose [id...]  the named ones (or the strongest --limit) as a proposal  [--message m]
   noto-vault suggest --dismiss <id...>  never suggest these again (kept in .noto/dismissed.jsonl)
@@ -290,7 +290,7 @@ async function main(argv: string[]): Promise<number> {
           return 0;
         }
         const limit = number(values.limit, 40)!;
-        print(found, () => {
+        print(typeof values.limit === 'string' ? found.slice(0, limit) : found, () => {
           const shown = found.slice(0, limit);
           const counts = Object.entries(found.reduce<Record<string, number>>((all, item) => ({ ...all, [item.type]: (all[item.type] ?? 0) + 1 }), {}))
             .map(([type, n]) => `${n} ${type}`).join(', ');
@@ -388,15 +388,18 @@ async function review(vault: Vault, items: readonly Suggestion[], emphasis: (tex
   };
   const yes: Suggestion[] = [];
   const no: Suggestion[] = [];
+  // Only the owner writes under .noto/, so for anyone else a no is just a no for now.
+  const remembers = vault.principal.owner;
+  const question = `Link it? [y] yes  [n] no${remembers ? ', never again' : ''}  [s] skip  [q] stop: `;
   try {
     walk: for (const [index, item] of items.entries()) {
       console.log(`\n${index + 1}/${items.length}  ${formatSuggestion(item, emphasis)}`);
       for (;;) {
-        const answer = await ask('Link it? [y] yes  [n] no, never again  [s] skip  [q] stop: ');
+        const answer = await ask(question);
         if (answer === null) break walk;
         const letter = answer[0] ?? 's';
         if (letter === 'y') { yes.push(item); break; }
-        if (letter === 'n') { no.push(item); break; }
+        if (letter === 'n') { if (remembers) no.push(item); break; }
         if (letter === 's') break;
         if (letter === 'q') break walk;
       }

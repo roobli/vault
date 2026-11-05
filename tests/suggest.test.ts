@@ -25,6 +25,8 @@ beforeEach(() => {
   write('Elsewhere/essay.md', '# Essay\n\n我参考的是：目标设计说明。\n');
   write('Elsewhere/2026_11_01.md', '# 2026-11-01\n\n今天改了目标设计说明。\n');
   write('Elsewhere/label.md', '# Label\n\n属于这一类，[[Areas/Search/Design/notes|记一次 TiDB 执行计划学习探讨]] 里写过。\n');
+  write('顶层设计说明.md', '# 顶层设计说明\n\n怎么做。\n');
+  write('root-notes.md', '# Root\n\n先读顶层设计说明，再动手。\n');
   write('.noto/brain.yaml', 'kinds:\n  dated_names_are_logs: true\n');
 });
 
@@ -47,6 +49,9 @@ describe('suggest', () => {
       expect(near.score).toBeGreaterThan(log.score);
       expect(log.score).toBeGreaterThan(far.score);
       expect(far.score / near.score).toBeCloseTo(0.45, 1);
+      // Two notes in one folder are near however shallow it is, the vault's root included.
+      // The names weigh the same; 目标设计说明 is in three notes, which halves it (log2 of 4).
+      expect(mention(all, 'root-notes.md', '顶层设计说明.md')!.score).toBeCloseTo(near.score * 2, 1);
     } finally {
       vault.close();
     }

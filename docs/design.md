@@ -244,8 +244,8 @@ digits of the SHA-1 of its type, its note and its target, so the same
 suggestion has the same id on every run.
 
 A mention is weighed by how distinctive the name is, how many notes use it,
-and how near the two notes sit: notes sharing two or more folders are near,
-one folder counts 0.8, none 0.45, because across areas a title is as often an
+and how near the two notes sit: notes in the same folder, or sharing two or
+more folders, are near, one shared folder counts 0.8, none 0.45, because across areas a title is as often an
 ordinary phrase that is some other note's title. A day's log, and a card
 named by an id or alias written in its frontmatter, are never further than
 0.8. A title with Chinese running on into it on both sides counts 0.6. Only
