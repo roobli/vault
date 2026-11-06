@@ -5,6 +5,7 @@ import path from 'node:path';
 import { PassThrough } from 'node:stream';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { keyHash } from '../src/access.js';
+import { run } from '../src/cli.js';
 import { serve } from '../src/mcp.js';
 import { Vault } from '../src/vault.js';
 
@@ -130,6 +131,24 @@ describe('a folder that stops keeping memory', () => {
     const [first, second] = await before_and_after();
     expect(first!.result?.isError ?? true).toBe(true);
     expect(second!.result?.isError ?? true).toBe(true);
+    expect(existsSync(path.join(root, '.noto'))).toBe(false);
+  });
+});
+
+describe('a server started for a folder that does not keep memory', () => {
+  it('refuses, and makes no .noto', async () => {
+    rmSync(path.join(root, '.noto'), { recursive: true, force: true });
+    const said: string[] = [];
+    const error = console.error;
+    console.error = (...parts: unknown[]) => { said.push(parts.join(' ')); };
+    try {
+      await run(['mcp', '--root', root]);
+    } finally {
+      console.error = error;
+    }
+    expect(process.exitCode).toBe(2);
+    process.exitCode = 0;
+    expect(said.join('\n')).toMatch(/does not keep memory/);
     expect(existsSync(path.join(root, '.noto'))).toBe(false);
   });
 });

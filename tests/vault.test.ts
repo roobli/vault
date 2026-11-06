@@ -326,3 +326,34 @@ describe('who reads the vault', () => {
     }
   });
 });
+
+describe('building the index again', () => {
+  it('empties it in place, so another process reading it carries on, and makes a broken one anew', async () => {
+    const first = await Vault.open(root, { owner: true });
+    const reader = await Vault.open(root, { owner: true, refresh: false });
+    try {
+      const notes = (first.status() as { notes: number }).notes;
+      expect(notes).toBeGreaterThan(0);
+      const rebuilt = await Vault.open(root, { owner: true, rebuild: true });
+      try {
+        expect((rebuilt.status() as { notes: number }).notes).toBe(notes);
+        // The other connection still reads a whole index.
+        expect((reader.status() as { notes: number }).notes).toBe(notes);
+      } finally {
+        rebuilt.close();
+      }
+    } finally {
+      reader.close();
+      first.close();
+    }
+    const index = path.join(root, '.noto', 'index.sqlite');
+    for (const part of [`${index}-wal`, `${index}-shm`]) rmSync(part, { force: true });
+    writeFileSync(index, 'not a database at all, not even close to one');
+    const mended = await Vault.open(root, { owner: true, rebuild: true });
+    try {
+      expect((mended.status() as { notes: number }).notes).toBeGreaterThan(0);
+    } finally {
+      mended.close();
+    }
+  });
+});

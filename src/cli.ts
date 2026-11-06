@@ -117,6 +117,13 @@ async function main(argv: string[]): Promise<number> {
     }
   }
 
+  // A server answers for a folder that keeps memory and never starts keeping it: opening the vault
+  // would make .noto anew under no policy, which gives an agent without a key every open note.
+  if (command === 'mcp' && !existsSync(path.join(root, '.noto'))) {
+    console.error(`${root} does not keep memory (it has no .noto folder), so there is nothing to serve. Keep memory for it in Noto, or run noto-vault init there.`);
+    return 2;
+  }
+
   const key = process.env.NOTO_VAULT_KEY;
   const owner = command === 'mcp' ? values.owner === true : key === undefined || key === '';
   const vault = await Vault.open(root, { owner, ...(owner || !key ? {} : { key }), ...(process.env.NOTO_SESSION ? { session: process.env.NOTO_SESSION } : {}), refresh: command !== 'visit' });

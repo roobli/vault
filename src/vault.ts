@@ -4,7 +4,7 @@
  */
 
 import { createHash } from 'node:crypto';
-import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
+import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { loadAccess, type AccessPolicy, type Principal, type Sensitivity, type Verb } from './access.js';
 import { loadConfig, type BrainConfig, type Kind, type Source } from './config.js';
@@ -86,9 +86,27 @@ export interface OpenOptions {
   readonly session?: string;
   /** Refresh the index on open (default true). */
   readonly refresh?: boolean;
+  /**
+   * Empty the index first, so it is built again from the notes, the event
+   * logs and git. It is emptied in place, in one transaction, so another
+   * process that has it open (an agent's server) sees the old index or the
+   * new; only an index that cannot be opened at all is deleted and made anew.
+   */
+  readonly rebuild?: boolean;
 }
 
 const sha = (data: string | Buffer): string => createHash('sha256').update(data).digest('hex');
+
+function rebuiltStore(file: string): Store {
+  try {
+    const store = Store.open(file);
+    store.reset();
+    return store;
+  } catch {
+    for (const part of [file, `${file}-wal`, `${file}-shm`]) rmSync(part, { force: true });
+    return Store.open(file);
+  }
+}
 const iso = (ms: number | null): string | null => (ms === null ? null : new Date(ms).toISOString());
 
 interface RawNoteRow {
@@ -139,7 +157,7 @@ export class Vault {
     const scripts = await loadScripts(absolute);
     const principal = options.owner ? access.owner : access.principalFor(options.key);
     const fingerprint = Vault.fingerprint(absolute);
-    const store = Store.open(indexPath(absolute));
+    const store = options.rebuild ? rebuiltStore(indexPath(absolute)) : Store.open(indexPath(absolute));
     const vault = new Vault(absolute, store, config, access, scripts, principal, fingerprint, options.session);
     if (options.refresh !== false) vault.refresh();
     return vault;
