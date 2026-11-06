@@ -50,7 +50,13 @@ An editor changes the same file through `addAgent`, `revokeAgent` and
 file's own indent, so its comments stay, and each edit is read back with
 the server's parser before it is saved: if the file would mean anything
 besides the asked-for change, nothing is written and a `PolicyEditError`
-says which part to change by hand.
+says which part to change by hand. `privacyMarks` names the folders a
+pattern locks by name, and `noteSensitivity` says whether a note's own
+frontmatter makes it stricter than its folder; neither opens the index.
+
+A server stops serving a folder whose `.noto` was taken away (an editor
+turning memory off moves it to the Trash): it answers that the folder no
+longer keeps memory rather than opening the vault anew under no policy.
 
 The MCP server speaks both the `initialize` handshake (2025-11-25 and earlier)
 and per-request metadata (2026-07-28). Its tools are the eight verbs: `recall`,
