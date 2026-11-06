@@ -68,8 +68,6 @@ export function relink(input: RelinkInput): RelinkedNote[] {
   const before = after.filter((file) => !movedFrom.has(file)).concat(input.moves.map((move) => move.from));
   const was = buildResolveIndex(before, undefined, input.rootName);
   const now = buildResolveIndex(after, undefined, input.rootName);
-  const wasStrict = byPathOnly(was);
-  const nowStrict = byPathOnly(now);
   const out: RelinkedNote[] = [];
   for (const [here, text] of input.notes) {
     const there = movedFrom.get(here) ?? here;
@@ -77,59 +75,75 @@ export function relink(input: RelinkInput): RelinkedNote[] {
     for (const link of extractLinks(text)) {
       const line = link.kind === 'wiki' ? '' : /:\d+$/.exec(link.target)?.[0] ?? '';
       const written = line ? link.target.slice(0, -line.length) : link.target;
-      const reached = reach(was, wasStrict, dirOf(there), written, link.kind);
+      const reached = linkReaches(was, dirOf(there), written, link.kind);
       if (reached === null) continue;
       const goal = movedTo.get(reached) ?? reached;
-      if (reach(now, nowStrict, dirOf(here), written, link.kind) === goal) continue;
-      const original = text.slice(link.start, link.end);
-      const at = targetAt(original, link.kind, link.target);
-      if (at < 0) continue;
+      if (linkReaches(now, dirOf(here), written, link.kind) === goal) continue;
+      // The parser says where the target begins; the text there must be it, or nothing is touched.
+      if (text.slice(link.targetStart, link.targetStart + written.length) !== written) continue;
       const next = link.kind === 'wiki'
-        ? wikiTarget(now, nowStrict, written, goal, dirOf(here))
-        : pathTarget(nowStrict, written, reached, goal, dirOf(here), link.kind);
+        ? wikiTarget(now, written, goal, dirOf(here))
+        : pathTarget(now, written, reached, goal, dirOf(here), link.kind);
       if (next === null) continue;
-      splices.push({ start: link.start + at, end: link.start + at + written.length, text: next });
+      splices.push({ start: link.targetStart, end: link.targetStart + written.length, text: next });
     }
     if (splices.length === 0) continue;
     let result = text;
+    let edge = Infinity;
+    let links = 0;
+    // From the end, so each splice's offsets still hold; two that overlap are not both a link, and neither is written.
     for (const splice of splices.sort((left, right) => right.start - left.start)) {
+      if (splice.end > edge) continue;
       result = result.slice(0, splice.start) + splice.text + result.slice(splice.end);
+      edge = splice.start;
+      links += 1;
     }
-    out.push({ path: here, text: result, links: splices.length });
+    if (links > 0) out.push({ path: here, text: result, links });
   }
   return out;
 }
 
-/** The index without its names, so a link is found only where its path says. */
-function byPathOnly(index: ResolveIndex): ResolveIndex {
-  return { ...index, byBase: new Map(), byBaseLower: new Map() };
+/**
+ * The file a link reaches, as an editor that follows it opens it: a bare-name
+ * wiki link by its name (the vault's resolver); a wiki link written as a path
+ * by that path, from the vault's root or from the note; a Markdown link or
+ * image by its path from the note alone, or as an absolute path through the
+ * vault's folder. The vault's resolver also tries a Markdown path from the
+ * root and falls back to the name, which no other tool does: a link found
+ * only that way is not one a move broke, and is left alone. Null for none.
+ */
+export function linkReaches(index: ResolveIndex, fromDir: string, target: string, kind: LinkKind): string | null {
+  if (kind === 'wiki') {
+    if (!target.includes('/')) return resolveLink(index, fromDir, { target, kind })?.path ?? null;
+    return byPath(index, [target, path.posix.join(fromDir, target)], kind);
+  }
+  const raw = target.replace(/\\/g, '/');
+  const inVault = index.throughRoot?.exec(raw);
+  if (inVault) return byPath(index, [inVault[1]!], kind);
+  if (raw.startsWith('/')) return null;
+  return byPath(index, [path.posix.join(fromDir, raw)], kind);
 }
 
-/** The note a link reaches: a bare-name wiki link by its name, anything else by its path. */
-function reach(index: ResolveIndex, strict: ResolveIndex, fromDir: string, target: string, kind: LinkKind): string | null {
-  const byName = kind === 'wiki' && !target.includes('/');
-  return resolveLink(byName ? index : strict, fromDir, { target, kind })?.path ?? null;
-}
-
-/** Where a link's target, as written, begins inside the link's own text; -1 when it cannot be placed. */
-function targetAt(original: string, kind: LinkKind, target: string): number {
-  if (kind === 'wiki') return original.indexOf(target, 2);
-  // The label holds no `]`, so the first `](` ends it.
-  let at = original.indexOf('](');
-  if (at < 0) return -1;
-  at += 2;
-  if (original[at] === '<') at += 1;
-  return original.startsWith(target, at) ? at : -1;
+function byPath(index: ResolveIndex, candidates: readonly string[], kind: LinkKind): string | null {
+  for (const candidate of candidates) {
+    for (const variant of [candidate, safeDecode(candidate)]) {
+      const normal = path.posix.normalize(variant.replace(/^\.\//, '')).replace(/^\.\//, '');
+      if (normal.startsWith('../')) continue;
+      if (index.files.has(normal)) return normal;
+      if (kind !== 'img' && index.files.has(`${normal}.md`)) return `${normal}.md`;
+    }
+  }
+  return null;
 }
 
 /** A wiki link's target for `goal`: its bare name while that is unique and was how it was written, else its path. */
-function wikiTarget(index: ResolveIndex, strict: ResolveIndex, written: string, goal: string, fromDir: string): string | null {
+function wikiTarget(index: ResolveIndex, written: string, goal: string, fromDir: string): string | null {
   const keepExt = isMarkdown(written) || !isMarkdown(goal);
   const full = keepExt ? goal : withoutExt(goal);
   const name = full.slice(full.lastIndexOf('/') + 1);
   const tries = written.includes('/') ? [full] : [name, full];
   for (const candidate of tries) {
-    if (reach(index, strict, fromDir, candidate, 'wiki') === goal) return candidate;
+    if (linkReaches(index, fromDir, candidate, 'wiki') === goal) return candidate;
   }
   return null;
 }
@@ -159,7 +173,7 @@ function pathTarget(
   // Escaped in angle brackets too: a space there ends the link for every reader that does not know the form.
   next = escaped(written) ? encodeURI(next).replace(/\(/g, '%28').replace(/\)/g, '%29') : next.replace(/ /g, '%20').replace(/\)/g, '%29');
   // Written again only when it is sure to reach the note: anything else is left for a person.
-  if (resolveLink(index, fromDir, { target: next, kind })?.path !== goal) return null;
+  if (linkReaches(index, fromDir, next, kind) !== goal) return null;
   return next;
 }
 

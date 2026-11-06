@@ -2,7 +2,7 @@ export { Vault, AccessError, ConflictError, snippetOf } from './vault.js';
 export type { NoteRow, NoteHeat, ReadResult, SearchHit, SearchOptions, OpenOptions, GraphExport, GraphNode, GraphEdge } from './vault.js';
 export { about } from './about.js';
 export { folderAbout } from './folder.js';
-export { relink, relinkTokens } from './relink.js';
+export { linkReaches, relink, relinkTokens } from './relink.js';
 export type { Move, RelinkInput, RelinkedNote } from './relink.js';
 export type { FolderAbout, FolderNote, FolderAboutOptions } from './folder.js';
 export { indexPath } from './store.js';

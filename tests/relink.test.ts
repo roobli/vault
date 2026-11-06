@@ -41,6 +41,25 @@ describe('a note moved', () => {
   });
 });
 
+describe('links the parser once read wrong', () => {
+  it('writes the link around a picture, and the picture, each once', () => {
+    const files = ['Work/a.md', 'Work/pic.png', 'essay.md'];
+    const moves = [{ from: 'a.md', to: 'Work/a.md' }, { from: 'pic.png', to: 'Work/pic.png' }];
+    const out = run(files, moves, { 'essay.md': 'A badge [![i](pic.png)](a.md), and the same twice [![i](a.md)](a.md).' });
+    expect(out['essay.md']).toBe('A badge [![i](Work/pic.png)](Work/a.md), and the same twice [![i](Work/a.md)](Work/a.md).');
+  });
+
+  it("follows a note out of the root to the neighbours it left there, which other tools read from the note", () => {
+    const out = run(['sub/a.md', 'x.md', 'docs/y.md'], [{ from: 'a.md', to: 'sub/a.md' }], { 'sub/a.md': '[x](x.md) and [y](docs/y.md)' });
+    expect(out['sub/a.md']).toBe('[x](../x.md) and [y](../docs/y.md)');
+  });
+
+  it('leaves an escaped bracket alone: it was written so as not to be a link', () => {
+    expect(run(['Work/a.md', 'essay.md'], [{ from: 'a.md', to: 'Work/a.md' }], { 'essay.md': String.raw`\[x](a.md) but [y](a.md)` }))
+      .toEqual({ 'essay.md': String.raw`\[x](a.md) but [y](Work/a.md)` });
+  });
+});
+
 describe('a note renamed', () => {
   it('follows the new name, keeps labels, and falls back to the path when the name is taken', () => {
     const files = ['Ideas/roadmap.md', 'essay.md', 'Old/roadmap2.md'];

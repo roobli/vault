@@ -82,12 +82,20 @@ export function maskCode(text: string): string {
 
 // The target may not contain brackets; the label may.
 const WIKI_RE = /\[\[([^[\]\n|]+?)(\|[^\n]*?)?\]\]/g;
-const MD_RE = /(!?)\[([^\]\n]*)\]\(<?([^)\s>]+)>?(?:\s+"[^"]*")?\)/g;
+/*
+ * A label may hold one image, the badge-and-thumbnail pattern
+ * `[![alt](pic.png)](note.md)`: without that, the image's own `](` ended the
+ * label, the outer link was read as one to the picture, and the note it led to
+ * was never seen.
+ */
+const MD_RE = /(!?)\[((?:[^\]\n[]|!\[[^\]\n]*\]\([^)\s]*\))*)\]\((<?)([^)\s>]+)>?(?:\s+"[^"]*")?\)/g;
 
 interface RawLink {
   kind: LinkKind;
   start: number;
   end: number;
+  /** Where `target`, as written, begins in the text: so it can be replaced without looking for it again. */
+  targetStart: number;
   target: string;
   anchor: string;
   label: string | null;
@@ -107,26 +115,38 @@ export function extractLinks(text: string): RawLink[] {
     const anchor = hash === -1 ? '' : targetPart.slice(hash);
     if (!target || !/[A-Za-z㐀-鿿]/.test(target)) continue;
     if (target.startsWith(':') || target.endsWith('\\') || target.includes('](') || /https?:/.test(target)) continue;
-    links.push({ kind: 'wiki', start: index, end: index + match[0].length, target, anchor, label });
+    if (masked[index - 1] === '\\') continue;
+    const lead = targetPart.length - targetPart.trimStart().length;
+    links.push({ kind: 'wiki', start: index, end: index + match[0].length, targetStart: index + 2 + lead, target, anchor, label });
   }
-  for (const match of masked.matchAll(MD_RE)) {
-    const rawTarget = match[3]!;
-    if (/^([a-z][a-z0-9+.-]*:|#|\/\/)/i.test(rawTarget)) continue;
-    const hash = rawTarget.indexOf('#');
-    const target = hash === -1 ? rawTarget : rawTarget.slice(0, hash);
-    const anchor = hash === -1 ? '' : rawTarget.slice(hash);
-    if (!target) continue;
-    const index = match.index!;
-    const labelAt = index + match[1]!.length + 1;
-    links.push({
-      kind: match[1] ? 'img' : 'md',
-      start: index,
-      end: index + match[0].length,
-      target,
-      anchor,
-      label: text.slice(labelAt, labelAt + match[2]!.length),
-    });
-  }
+  const markdown = (from: number, until: number, inner: boolean): void => {
+    const pattern = new RegExp(MD_RE.source, 'g');
+    for (const match of masked.slice(from, until).matchAll(pattern)) {
+      const index = from + match.index!;
+      // `\[x](y)` is text, written so it would not be a link.
+      if (masked[index - 1] === '\\') continue;
+      const rawTarget = match[4]!;
+      const labelAt = index + match[1]!.length + 1;
+      const labelText = match[2]!;
+      // The image inside a label is a link of its own, to its picture.
+      if (!inner && labelText.includes('](')) markdown(labelAt, labelAt + labelText.length, true);
+      if (/^([a-z][a-z0-9+.-]*:|#|\/\/)/i.test(rawTarget)) continue;
+      const hash = rawTarget.indexOf('#');
+      const target = hash === -1 ? rawTarget : rawTarget.slice(0, hash);
+      const anchor = hash === -1 ? '' : rawTarget.slice(hash);
+      if (!target) continue;
+      links.push({
+        kind: match[1] ? 'img' : 'md',
+        start: index,
+        end: index + match[0].length,
+        targetStart: labelAt + labelText.length + 2 + match[3]!.length,
+        target,
+        anchor,
+        label: text.slice(labelAt, labelAt + labelText.length),
+      });
+    }
+  };
+  markdown(0, masked.length, false);
   links.sort((left, right) => left.start - right.start);
   return links;
 }
