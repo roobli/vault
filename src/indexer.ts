@@ -9,7 +9,7 @@
  * of that brought something new, heat and edges are recomputed.
  */
 
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { closeSync, existsSync, lstatSync, openSync, readdirSync, readFileSync, readSync, statSync } from 'node:fs';
 import path from 'node:path';
 import type { AccessPolicy, Sensitivity } from './access.js';
@@ -323,8 +323,9 @@ export function refresh(ix: IndexContext, options: { full?: boolean; paths?: rea
   const insertAlias = db.prepare('INSERT INTO aliases(key, path, origin) VALUES (?, ?, ?)');
   const insertRename = db.prepare('INSERT INTO renames(old, new, time, origin) VALUES (?, ?, ?, ?)');
   const priorNames = db.prepare('SELECT title, kind, source, sensitivity, aliases, frontmatter FROM notes WHERE path = ?');
-  // A counter, not a time: two refreshes in one millisecond must still read as two changes.
-  const bumpNames = db.prepare("INSERT INTO meta(key, value) VALUES ('names', '1') ON CONFLICT(key) DO UPDATE SET value = CAST(value AS INTEGER) + 1");
+  // A new random token per change, not a time or a counter: two refreshes in one millisecond
+  // still differ, and an index rebuilt from nothing never repeats what an open vault has seen.
+  const markNames = db.prepare("INSERT INTO meta(key, value) VALUES ('names', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value");
 
   const changedNotes = new Set<string>();
   const priorAliases = new Map<string, string>();
@@ -336,7 +337,7 @@ export function refresh(ix: IndexContext, options: { full?: boolean; paths?: rea
 
   store.transaction(() => {
     // Whether any note was added, removed, renamed, retitled, or became visible to someone else.
-    // `names` in meta counts these, so a table of names can be kept until it moves.
+    // Each gets a new `names` token in meta, so a table of names can be kept until it changes.
     let namesChanged = full;
     if (full) {
       // FTS5's own command: deleting a contentless table's rows one by one is slow.
@@ -413,7 +414,7 @@ export function refresh(ix: IndexContext, options: { full?: boolean; paths?: rea
     for (const [rel, stat] of disk) {
       if (!stat.note && (full || !known.has(rel))) insertFile.run(rel, 0, 0, 0);
     }
-    if (namesChanged) bumpNames.run();
+    if (namesChanged) markNames.run(randomUUID());
     if (parsed > 0) lap(`notes loop: read ${Math.round(readMs)} ms, parse ${Math.round(buildMs)} ms, full text ${Math.round(ftsMs)} ms, other writes ${Math.round(performance.now() - loopStart - readMs - buildMs - ftsMs)} ms`);
   });
 

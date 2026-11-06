@@ -326,7 +326,7 @@ one, and sees only its own entries among the readers and leads, and itself
 among the agents; the reads per day and the together weights count everyone,
 as heat, recall and suggest already do. It runs on every note switch, so it reads the index by the note's
 own keys; the name matcher behind the mentions is kept by an open vault
-until the index counts a change of names (`names` in its meta table).
+until the index marks a change of names with a new `names` token in its meta table.
 
 ## Indexing
 

@@ -225,9 +225,9 @@ interface Target { path: string; weight: number; name: string; card: boolean }
  * The notes this principal can see, and once asked for, the matcher over
  * their names. Building the matcher over every title is most of what one
  * note's mentions cost, and it stays the same until a note is added, removed,
- * renamed, retitled or seen differently, which the index counts in its
- * `names` meta key. So an open vault keeps the table between calls, as an
- * editor that asks on every note switch needs.
+ * renamed, retitled or seen differently, which the index marks with a new
+ * token in its `names` meta key. So an open vault keeps the table between
+ * calls, as an editor that asks on every note switch needs.
  */
 interface NameTable {
   readonly version: string | null;
@@ -247,7 +247,7 @@ function nameTable(vault: Vault): NameTable {
     .map((row) => ({ ...row, aliases: JSON.parse(row.aliases) as string[] }))
     .filter((row) => vault.canSee(row)) as NoteLite[];
   const table: NameTable = { version, notes, byPath: new Map(notes.map((note) => [note.path, note])) };
-  // An index from before the counter says nothing about when it changes: build afresh each time.
+  // An index from before the token says nothing about when it changes: build afresh each time.
   if (version !== null) tables.set(vault, table);
   return table;
 }
