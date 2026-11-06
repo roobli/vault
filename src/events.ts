@@ -23,7 +23,7 @@
  * visit without opening SQLite.
  */
 
-import { appendFileSync, existsSync, mkdirSync } from 'node:fs';
+import { appendFileSync, mkdirSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
@@ -94,7 +94,6 @@ function lineOf(events: readonly VaultEvent[], now: string): string {
  */
 export function recordEvents(root: string, events: readonly VaultEvent[], host: string = hostName()): boolean {
   if (events.length === 0) return true;
-  if (!existsSync(path.join(root, '.noto'))) return false;
   const now = new Date().toISOString();
   const lines: string[] = [];
   let run: VaultEvent[] = [];
@@ -107,9 +106,23 @@ export function recordEvents(root: string, events: readonly VaultEvent[], host: 
   }
   lines.push(lineOf(run, now));
   const file = eventFile(root, host, new Date(events[0]!.time ?? now));
-  mkdirSync(path.dirname(file), { recursive: true });
+  // Each folder made only inside one that is there, so a .noto taken away a moment ago is never made anew.
+  if (!folderIn(eventsDir(root)) || !folderIn(path.dirname(file))) return false;
   appendFileSync(file, `${lines.join('\n')}\n`, 'utf8');
   return true;
+}
+
+/** Make a folder that may be there already; false when its parent is not. */
+function folderIn(dir: string): boolean {
+  try {
+    mkdirSync(dir);
+    return true;
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === 'EEXIST') return true;
+    if (code === 'ENOENT' || code === 'ENOTDIR') return false;
+    throw error;
+  }
 }
 
 export function recordEvent(root: string, event: VaultEvent, host?: string): boolean {
