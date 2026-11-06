@@ -597,10 +597,23 @@ export class Vault {
     return proposalFile(this.requireRepo(), id, rel);
   }
 
+  /** Whether the vault is in a git repository, which proposals need. */
+  inGit(): boolean {
+    return this.repo !== null;
+  }
+
   accept(id: string): AcceptResult {
     if (!this.principal.owner) throw new AccessError('Only the owner accepts proposals.');
     const repo = this.requireRepo();
     const files = this.proposals().find((proposal) => proposal.id === id)?.files.map((file) => file.path) ?? [];
+    // A proposal is a ref anyone with git can write, so what it may touch is
+    // checked as it lands, not only when made: never the folder's settings
+    // (.noto/access.yaml would let an agent grant itself more), its scripts,
+    // or anything under a dot folder or node_modules.
+    const settled = files.filter((rel) => rel.split('/').some((part) => part.startsWith('.') || part === 'node_modules'));
+    if (settled.length > 0) {
+      throw new AccessError(`A proposal may not change ${settled.join(', ')}: settings and dot folders are changed by hand.`);
+    }
     const result = acceptProposal(repo, this.root, id);
     this.recordEvent(result.conflicts.length === 0 ? 'accept' : 'propose', files);
     if (result.applied.length > 0) this.refresh({ paths: result.applied });

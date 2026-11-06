@@ -236,6 +236,12 @@ are made with git's plumbing against a temporary index, so the working tree,
 the person's index and their branches are never touched, and the refs are not
 branches, so nothing pushes them.
 
+A proposal is a ref anyone with git can write, so what it may touch is
+checked again when it is accepted: never a file under a dot folder (the
+folder's settings in `.noto/`, its scripts, `.git`) or `node_modules`, and
+never a file outside the vault when the vault is a folder of a larger
+repository. Such a proposal is refused, named, and stays to be rejected.
+
 Proposals are diffed without rename detection: a move is a deletion and an
 addition, and the reviewer sees and the accept applies both. For showing one
 file side by side, `vault.proposalFile(id, path)` gives it at both ends, null

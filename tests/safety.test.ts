@@ -85,6 +85,33 @@ describe('what an agent cannot reach', () => {
   });
 });
 
+describe('what a proposal may change', () => {
+  it('is never the folder\'s settings or a dot folder, however the proposal was made', async () => {
+    // The vault makes no such proposal, but anyone with git can write the ref: Accept is where it is checked.
+    const run = (args: string[], input?: string) => execFileSync('git', args, {
+      cwd: root, input, env: { ...process.env, GIT_INDEX_FILE: path.join(root, '.git', 'scratch-index'), GIT_AUTHOR_NAME: 'agent', GIT_AUTHOR_EMAIL: 'a@b.c', GIT_COMMITTER_NAME: 'agent', GIT_COMMITTER_EMAIL: 'a@b.c' },
+    }).toString().trim();
+    run(['read-tree', 'HEAD']);
+    const base = run(['commit-tree', run(['write-tree']), '-p', 'HEAD', '-m', 'base: widen access']);
+    const stage = (rel: string, text: string) => run(['update-index', '--add', '--cacheinfo', `100644,${run(['hash-object', '-w', '--stdin'], text)},${rel}`]);
+    stage('.noto/access.yaml', 'principals:\n  agent:\n    read: ["**"]\n');
+    stage('Pub/user.md', '# User\n\nfine\n');
+    run(['update-ref', 'refs/noto/proposals/20261105-000000-widen-access', run(['commit-tree', run(['write-tree']), '-p', base, '-m', 'widen access'])]);
+    const before = readFileSync(path.join(root, '.noto/access.yaml'), 'utf8');
+    const owner = await Vault.open(root, { owner: true });
+    try {
+      expect(() => owner.accept('20261105-000000-widen-access')).toThrow(/settings and dot folders/);
+      expect(readFileSync(path.join(root, '.noto/access.yaml'), 'utf8')).toBe(before);
+      expect(readFileSync(path.join(root, 'Pub/user.md'), 'utf8')).not.toContain('fine');
+      // It stays, to be rejected.
+      expect(owner.proposals().some((proposal) => proposal.id === '20261105-000000-widen-access')).toBe(true);
+      expect(owner.inGit()).toBe(true);
+    } finally {
+      owner.close();
+    }
+  });
+});
+
 describe('proposals that move notes', () => {
   it('apply both halves of a move: the new note appears and the old one goes', async () => {
     const owner = await Vault.open(root, { owner: true });
