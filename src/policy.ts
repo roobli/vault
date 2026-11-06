@@ -20,7 +20,7 @@
  */
 
 import { randomBytes } from 'node:crypto';
-import { closeSync, existsSync, lstatSync, mkdirSync, openSync, readFileSync, readSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { closeSync, existsSync, lstatSync, mkdirSync, openSync, readFileSync, readSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { accessPath, keyHash, parseAccess, SENSITIVITIES, type Sensitivity } from './access.js';
 import { frontmatterOf } from './markdown.js';
@@ -512,6 +512,8 @@ export function noteSensitivity(root: string, rel: string): { folder: Sensitivit
   const folder = parseAccess(readText(root)).sensitivityOf(rel);
   let head = '';
   try {
+    // A regular file only: opening a pipe to read it would wait for a writer.
+    if (!statSync(path.join(root, rel)).isFile()) return { folder, own: null, stricter: false };
     const fd = openSync(path.join(root, rel), 'r');
     try {
       const buffer = Buffer.alloc(HEAD_BYTES);
