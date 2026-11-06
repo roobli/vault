@@ -92,15 +92,29 @@ const sha = (data: Buffer | string): string => createHash('sha256').update(data)
 const higher = (left: Sensitivity, right: Sensitivity | undefined | null): Sensitivity =>
   right && SENSITIVITIES.indexOf(right) > SENSITIVITIES.indexOf(left) ? right : left;
 
-function kindOf(rel: string, fm: Record<string, unknown>, config: BrainConfig): Kind {
+/**
+ * Where a value the index holds came from: the note's frontmatter, a vault
+ * script, a folder rule in `access.yaml`, a rule in `brain.yaml`, or nothing
+ * that said anything.
+ */
+export type Origin = 'note' | 'script' | 'folder' | 'config' | 'default';
+
+/** The origin of each derived field, as `notes.origins` keeps it. */
+export interface Origins {
+  readonly kind: Origin;
+  readonly known: Origin;
+  readonly sensitivity: Origin;
+}
+
+function kindOf(rel: string, fm: Record<string, unknown>, config: BrainConfig): { kind: Kind; from: Origin } {
   for (const field of config.kinds.fields) {
     const value = fm[field];
-    if (typeof value === 'string' && config.kinds.map[value]) return config.kinds.map[value]!;
+    if (typeof value === 'string' && config.kinds.map[value]) return { kind: config.kinds.map[value]!, from: 'config' };
   }
   const isCardName = config.kinds.cards.includes(baseOf(rel));
-  if (fm.moc === true || (isCardName && (fm.id !== undefined || fm.moc !== undefined))) return 'card';
-  if (config.kinds.datedNamesAreLogs && dateFromName(rel)) return 'log';
-  return 'note';
+  if (fm.moc === true || (isCardName && (fm.id !== undefined || fm.moc !== undefined))) return { kind: 'card', from: 'config' };
+  if (config.kinds.datedNamesAreLogs && dateFromName(rel)) return { kind: 'log', from: 'config' };
+  return { kind: 'note', from: 'default' };
 }
 
 /** How long a note is, as a reader counts: each CJK character, and each other word. */
@@ -122,6 +136,7 @@ interface Built {
   readonly row: {
     path: string; hash: string; title: string; id: string | null; kind: Kind; source: Source | null; sensitivity: Sensitivity;
     status: string | null; date: string | null; chars: number; frontmatter: string; headings: string; tags: string; aliases: string;
+    origins: string;
   };
   readonly links: readonly (Link & { readonly derived?: boolean })[];
   readonly aliases: readonly string[];
@@ -136,7 +151,8 @@ function buildNote(ix: IndexContext, rel: string, text: string, hash: string): B
   let searchText = parsed.body;
   for (const script of ix.scripts.scripts) if (script.text) searchText = script.text({ ...scriptNote, body: searchText });
 
-  const kind = derived.kind && KINDS.includes(derived.kind) ? derived.kind : kindOf(rel, fm, ix.config);
+  const ruled = derived.kind && KINDS.includes(derived.kind) ? { kind: derived.kind, from: 'script' as const } : kindOf(rel, fm, ix.config);
+  const kind = ruled.kind;
   // How a note is known is written as `known:`; `source:` in most vaults already
   // says where a note came from (a URL, a book), so it is never read for this.
   // What the note says wins over what a script infers: only a person writes `lived`.
@@ -145,6 +161,14 @@ function buildNote(ix: IndexContext, rel: string, text: string, hash: string): B
   // The folder sets a floor; a script or the note itself may only raise it.
   const fmSensitivity = typeof fm.sensitivity === 'string' && (SENSITIVITIES as readonly string[]).includes(fm.sensitivity) ? fm.sensitivity as Sensitivity : null;
   const sensitivity = higher(higher(ix.access.sensitivityOf(rel), derived.sensitivity), fmSensitivity);
+  // Kept now, so that showing where a value came from never runs the scripts again.
+  // When layers agree, the one closest to the note is named: the note, then a script, then the folder.
+  const origins: Origins = {
+    kind: ruled.from,
+    known: fmSource ? 'note' : derived.source !== undefined ? 'script' : 'default',
+    sensitivity: sensitivity === fmSensitivity ? 'note' : sensitivity === derived.sensitivity ? 'script'
+      : ix.access.sensitivityRule(rel) !== null ? 'folder' : 'default',
+  };
   const id = typeof fm.id === 'string' || typeof fm.id === 'number' ? String(fm.id).trim() || null : null;
   const status = derived.status !== undefined ? derived.status : typeof fm.status === 'string' ? fm.status : null;
   const fmDate = typeof fm.date === 'string' ? fm.date : typeof fm.created === 'string' ? fm.created : null;
@@ -163,6 +187,7 @@ function buildNote(ix: IndexContext, rel: string, text: string, hash: string): B
       headings: JSON.stringify(parsed.headings),
       tags: JSON.stringify(tags),
       aliases: JSON.stringify(aliases),
+      origins: JSON.stringify(origins),
     },
     links,
     aliases,
@@ -278,11 +303,11 @@ export function refresh(ix: IndexContext, options: { full?: boolean; paths?: rea
   const deleteFts = db.prepare('DELETE FROM fts WHERE rowid = ?');
   const deleteLinks = db.prepare('DELETE FROM links WHERE src = ?');
   const deleteAliases = db.prepare("DELETE FROM aliases WHERE path = ? AND origin IN ('id', 'alias')");
-  const upsertNote = db.prepare(`INSERT INTO notes(path, hash, title, id, kind, source, sensitivity, status, date, chars, frontmatter, headings, tags, aliases)
-    VALUES (@path, @hash, @title, @id, @kind, @source, @sensitivity, @status, @date, @chars, @frontmatter, @headings, @tags, @aliases)
+  const upsertNote = db.prepare(`INSERT INTO notes(path, hash, title, id, kind, source, sensitivity, status, date, chars, frontmatter, headings, tags, aliases, origins)
+    VALUES (@path, @hash, @title, @id, @kind, @source, @sensitivity, @status, @date, @chars, @frontmatter, @headings, @tags, @aliases, @origins)
     ON CONFLICT(path) DO UPDATE SET hash = excluded.hash, title = excluded.title, id = excluded.id, kind = excluded.kind, source = excluded.source,
       sensitivity = excluded.sensitivity, status = excluded.status, date = excluded.date, chars = excluded.chars, frontmatter = excluded.frontmatter,
-      headings = excluded.headings, tags = excluded.tags, aliases = excluded.aliases
+      headings = excluded.headings, tags = excluded.tags, aliases = excluded.aliases, origins = excluded.origins
     RETURNING nid`);
   const insertFts = db.prepare('INSERT INTO fts(rowid, title, path, body) VALUES (?, ?, ?, ?)');
   const insertLink = db.prepare('INSERT INTO links(src, kind, target, anchor, label, relation, line, start, end) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)');

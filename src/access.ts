@@ -36,6 +36,8 @@ export interface AccessPolicy {
   readonly owner: Principal;
   /** The sensitivity the policy gives a path, before scripts and frontmatter. */
   sensitivityOf(rel: string): Sensitivity;
+  /** The `sensitivity:` pattern that gives a path its level; null when the default does. */
+  sensitivityRule(rel: string): string | null;
   /** The principal a key names; no key is `default`. Throws on an unknown key. */
   principalFor(key: string | undefined): Principal;
   principal(name: string): Principal | undefined;
@@ -105,6 +107,7 @@ export function parseAccess(text: string): AccessPolicy {
   }
   rules.sort((left, right) => right.pattern.length - left.pattern.length);
   const sensitivityOf = (rel: string): Sensitivity => rules.find((rule) => rule.match(rel))?.level ?? fallback;
+  const sensitivityRule = (rel: string): string | null => rules.find((rule) => rule.match(rel))?.pattern ?? null;
 
   const owner = makeOwner();
   const principals = new Map<string, Principal & { keys: readonly string[] }>();
@@ -119,6 +122,7 @@ export function parseAccess(text: string): AccessPolicy {
     owner,
     text,
     sensitivityOf,
+    sensitivityRule,
     principal: (name) => (name === 'owner' ? owner : principals.get(name)),
     principalFor(key) {
       if (key === undefined || key.trim() === '') return principals.get('default')!;

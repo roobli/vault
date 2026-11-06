@@ -8,7 +8,7 @@ import { mkdirSync } from 'node:fs';
 import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 
-export const SCHEMA_VERSION = 3;
+export const SCHEMA_VERSION = 4;
 
 const SCHEMA = `
 CREATE TABLE meta(key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -28,7 +28,8 @@ CREATE TABLE notes(
   frontmatter TEXT NOT NULL,
   headings TEXT NOT NULL,
   tags TEXT NOT NULL,
-  aliases TEXT NOT NULL
+  aliases TEXT NOT NULL,
+  origins TEXT NOT NULL
 );
 CREATE INDEX notes_id ON notes(id);
 CREATE TABLE links(
@@ -52,6 +53,7 @@ CREATE INDEX aliases_key ON aliases(key);
 CREATE INDEX aliases_path ON aliases(path);
 CREATE TABLE renames(old TEXT NOT NULL, new TEXT NOT NULL, time INTEGER NOT NULL, origin TEXT NOT NULL);
 CREATE INDEX renames_old ON renames(old);
+CREATE INDEX renames_new ON renames(new);
 CREATE VIRTUAL TABLE fts USING fts5(title, path, body, content='', contentless_delete=1, tokenize='unicode61 remove_diacritics 2');
 CREATE TABLE commits(hash TEXT PRIMARY KEY, time INTEGER NOT NULL, author TEXT NOT NULL, subject TEXT NOT NULL, files INTEGER NOT NULL);
 CREATE TABLE changes(hash TEXT NOT NULL, time INTEGER NOT NULL, author TEXT NOT NULL, path TEXT NOT NULL, status TEXT NOT NULL, old TEXT);
