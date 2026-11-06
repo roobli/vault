@@ -1,6 +1,8 @@
 export { Vault, AccessError, ConflictError, snippetOf } from './vault.js';
 export type { NoteRow, NoteHeat, ReadResult, SearchHit, SearchOptions, OpenOptions, GraphExport, GraphNode, GraphEdge } from './vault.js';
 export { about } from './about.js';
+export { folderAbout } from './folder.js';
+export type { FolderAbout, FolderNote, FolderAboutOptions } from './folder.js';
 export { indexPath } from './store.js';
 export { initVault } from './init.js';
 export type { AboutNote, AboutOptions, Origin, Traced } from './about.js';
