@@ -185,8 +185,8 @@ class Parser {
   }
 }
 
-/** `key: rest` split at the first `:` that is followed by a space or the end, outside quotes. */
-function splitKey(content: string): [string, string] | null {
+/** `key: rest` split at the first `:` that is followed by a space or the end, outside quotes. Shared with the policy editor, so it finds keys as they are read. */
+export function splitKey(content: string): [string, string] | null {
   if (content === '' || isSeqItem(content) || /^[#[{]/.test(content)) return null;
   let quote: string | null = null;
   for (let at = 0; at < content.length; at += 1) {
@@ -209,7 +209,7 @@ function splitKey(content: string): [string, string] | null {
 }
 
 /** The text before a comment: a `#` at the start or after whitespace, outside quotes. */
-function stripComment(text: string): string {
+export function stripComment(text: string): string {
   let quote: string | null = null;
   for (let at = 0; at < text.length; at += 1) {
     const ch = text[at]!;
