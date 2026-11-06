@@ -1,5 +1,7 @@
 export { Vault, AccessError, ConflictError, snippetOf } from './vault.js';
 export type { NoteRow, NoteHeat, ReadResult, SearchHit, SearchOptions, OpenOptions, GraphExport, GraphNode, GraphEdge } from './vault.js';
+export { about } from './about.js';
+export type { AboutNote, AboutOptions, Origin, Traced } from './about.js';
 export { recall, excerptOf } from './recall.js';
 export type { RecallItem, RecallPack, RecallOptions } from './recall.js';
 export { suggest, toChanges } from './suggest.js';

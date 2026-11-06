@@ -41,6 +41,8 @@ export interface AccessPolicy {
   /** The principal a key names; no key is `default`. Throws on an unknown key. */
   principalFor(key: string | undefined): Principal;
   principal(name: string): Principal | undefined;
+  /** Every principal the file names, in its order, and `default` even when it does not; never the owner. */
+  readonly principals: readonly Principal[];
   readonly text: string;
 }
 
@@ -124,6 +126,7 @@ export function parseAccess(text: string): AccessPolicy {
     sensitivityOf,
     sensitivityRule,
     principal: (name) => (name === 'owner' ? owner : principals.get(name)),
+    principals: [...principals.values()],
     principalFor(key) {
       if (key === undefined || key.trim() === '') return principals.get('default')!;
       const hash = keyHash(key);
