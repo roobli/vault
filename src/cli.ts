@@ -434,50 +434,58 @@ async function readStdin(): Promise<string> {
  * start and one appended line. From a hook it never fails the agent's step.
  */
 async function record(args: readonly string[], hook: boolean, root: string | null): Promise<number> {
-  let verb: EventVerb | null;
-  let files: string[];
-  let session: string | undefined;
   if (hook) {
-    let payload: Record<string, unknown>;
-    try { payload = JSON.parse(await readStdin()) as Record<string, unknown>; } catch { return 0; }
-    verb = hookVerb(payload.tool_name);
-    const input = (payload.tool_input ?? {}) as Record<string, unknown>;
-    const file = [input.file_path, input.notebook_path, input.path].find((value): value is string => typeof value === 'string');
-    files = file ? [file] : [];
-    const cwd = typeof payload.cwd === 'string' ? payload.cwd : process.cwd();
-    files = files.map((item) => path.resolve(cwd, item));
-    if (typeof payload.session_id === 'string' && /^[A-Za-z0-9._:-]{1,80}$/.test(payload.session_id)) session = payload.session_id;
-  } else {
-    verb = RECORDABLE.includes(args[0] as EventVerb) ? args[0] as EventVerb : null;
-    if (!verb || args.length < 2) throw new UsageError(`Usage: noto-vault record <${RECORDABLE.join('|')}> <path...>`);
-    files = args.slice(1).map((item) => path.resolve(item));
+    // Whatever the payload, a hook's step goes on: every failure here is a line not recorded.
+    try { await recordFromHook(root); } catch { /* nothing recorded */ }
+    return 0;
   }
-  if (!verb || files.length === 0) return 0;
+  const verb = RECORDABLE.includes(args[0] as EventVerb) ? args[0] as EventVerb : null;
+  if (!verb || args.length < 2) throw new UsageError(`Usage: noto-vault record <${RECORDABLE.join('|')}> <path...>`);
   const acting = agentActor();
-  const actor = acting?.actor ?? 'owner';
-  session = process.env.NOTO_SESSION || session || acting?.session;
+  const recorded = recordNotes(args.slice(1).map((item) => path.resolve(item)), verb, acting?.actor ?? 'owner', process.env.NOTO_SESSION || acting?.session, root);
+  if (recorded === 0) console.error('None of these is a note in a folder that keeps memory, so nothing was recorded.');
+  return recorded > 0 ? 0 : 1;
+}
+
+/**
+ * A tool hook's payload on stdin. Only an agent's hook sends one, so what it
+ * records is never the person's: the agent its environment names, or
+ * `claude-code`, whose payload this is, when its environment names none.
+ */
+async function recordFromHook(root: string | null): Promise<void> {
+  // Run by hand at a terminal, there is nothing on stdin to wait for.
+  if (process.stdin.isTTY) return;
+  const payload: unknown = JSON.parse(await readStdin());
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return;
+  const fields = payload as Record<string, unknown>;
+  const verb = hookVerb(fields.tool_name);
+  const input = fields.tool_input && typeof fields.tool_input === 'object' ? fields.tool_input as Record<string, unknown> : {};
+  const file = [input.file_path, input.notebook_path, input.path].find((value): value is string => typeof value === 'string' && value !== '');
+  if (!verb || !file) return;
+  const cwd = typeof fields.cwd === 'string' ? fields.cwd : process.cwd();
+  const acting = agentActor();
+  const own = typeof fields.session_id === 'string' && /^[A-Za-z0-9._:-]{1,80}$/.test(fields.session_id) ? fields.session_id : undefined;
+  recordNotes([path.resolve(cwd, file)], verb, acting?.actor ?? 'claude-code', process.env.NOTO_SESSION || own || acting?.session, root);
+}
+
+/** Append one line per vault for the notes among `files`; how many were recorded. */
+function recordNotes(files: readonly string[], verb: EventVerb, actor: string, session: string | undefined, root: string | null): number {
   let recorded = 0;
-  try {
-    const byVault = new Map<string, string[]>();
-    for (const file of files) {
-      const vault = root ?? findRoot(path.dirname(file));
-      if (!vault) continue;
-      const rel = path.relative(vault, file);
-      if (!rel || rel.startsWith('..') || path.isAbsolute(rel) || !isMarkdown(rel)) continue;
-      const parts = rel.split(path.sep);
-      // The vault's own files and hidden folders are not notes.
-      if (parts.some((part) => part.startsWith('.'))) continue;
-      byVault.set(vault, [...(byVault.get(vault) ?? []), parts.join('/')]);
-    }
-    for (const [vault, rels] of byVault) {
-      if (recordEvents(vault, rels.map((rel) => ({ actor, verb: verb!, path: rel, ...(session ? { session } : {}) })))) recorded += rels.length;
-    }
-  } catch (error) {
-    if (hook) return 0;
-    throw error;
+  const byVault = new Map<string, string[]>();
+  for (const file of files) {
+    const vault = root ?? findRoot(path.dirname(file));
+    if (!vault) continue;
+    const rel = path.relative(vault, file);
+    if (!rel || rel.startsWith('..') || path.isAbsolute(rel) || !isMarkdown(rel)) continue;
+    const parts = rel.split(path.sep);
+    // The vault's own files and hidden folders are not notes.
+    if (parts.some((part) => part.startsWith('.'))) continue;
+    byVault.set(vault, [...(byVault.get(vault) ?? []), parts.join('/')]);
   }
-  if (!hook && recorded === 0) console.error('None of these is a note in a folder that keeps memory, so nothing was recorded.');
-  return hook || recorded > 0 ? 0 : 1;
+  for (const [vault, rels] of byVault) {
+    if (recordEvents(vault, rels.map((rel) => ({ actor, verb, path: rel, ...(session ? { session } : {}) })))) recorded += rels.length;
+  }
+  return recorded;
 }
 
 export async function run(argv: string[]): Promise<void> {

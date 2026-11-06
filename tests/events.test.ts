@@ -72,6 +72,19 @@ describe('writing events', () => {
   });
 });
 
+describe('a run as long as a line may count', () => {
+  it('is written when it reaches the most a reader counts, and the next repeat begins a new one', () => {
+    let now = Date.parse('2026-11-06T10:00:00.000Z');
+    const log = new EventLog(root, 'h', () => now, 60_000);
+    for (let at = 0; at < 1002; at += 1) {
+      log.record([{ actor: 'codex', verb: 'read', path: 'a.md', session: 's' }]);
+      now += 10;
+    }
+    log.flush();
+    expect(lines().map((line) => line.repeat ?? 1)).toEqual([1, 1000, 1]);
+  });
+});
+
 describe('reading events', () => {
   it('stands a line for each note it names and each time it repeats, spread over its run', () => {
     expect(eventRows({ time: '2026-11-06T10:00:00.000Z', actor: 'codex', verb: 'recall', paths: ['a.md', 'b.md'], query: 'q' }).map((row: { path: string }) => row.path)).toEqual(['a.md', 'b.md']);
@@ -97,6 +110,15 @@ describe('reading events', () => {
       writeFileSync(file, readFileSync(file, 'utf8').replace('"owner","verb":"recall"', '"codex","verb":"recall"'));
       vault.refresh();
       expect(about(vault, 'a.md', {})!.readers.map((reader) => [reader.actor, reader.count])).toEqual([['owner', 3], ['codex', 1]]);
+      // Another host's file that went away (a checkout without it) takes its lines with it.
+      const other = path.join(root, '.noto', 'events', 'other', '2026-11.jsonl');
+      mkdirSync(path.dirname(other), { recursive: true });
+      writeFileSync(other, `${JSON.stringify({ time: '2026-11-05T12:00:00.000Z', actor: 'owner', verb: 'open', path: 'a.md' })}\n`);
+      vault.refresh();
+      expect(about(vault, 'a.md', {})!.readers[0]).toMatchObject({ actor: 'owner', count: 4 });
+      rmSync(path.dirname(other), { recursive: true });
+      vault.refresh();
+      expect(about(vault, 'a.md', {})!.readers[0]).toMatchObject({ actor: 'owner', count: 3 });
     } finally {
       vault.close();
     }
@@ -153,9 +175,11 @@ describe('noto-vault record', () => {
     }
   });
 
-  it('takes an agent tool hook on stdin, and never fails the agent\'s step', async () => {
+  it('takes an agent tool hook on stdin as the agent\'s, even with nothing in its environment, and never fails the step', async () => {
     quiet();
-    vi.stubEnv('CLAUDECODE', '1');
+    // A hook may not be given the variables the agent's own commands get: the payload is enough.
+    vi.stubEnv('CLAUDECODE', '');
+    vi.stubEnv('CODEX_THREAD_ID', '');
     vi.stubEnv('NOTO_SESSION', '');
     vi.stubEnv('NOTO_ACTOR', '');
     const stdin = Object.getOwnPropertyDescriptor(process, 'stdin')!;
@@ -167,9 +191,12 @@ describe('noto-vault record', () => {
       await run(['record', '--hook']);
       feed(JSON.stringify({ session_id: 'cc3', cwd: root, tool_name: 'Bash', tool_input: { command: 'ls' } }));
       await run(['record', '--hook']);
-      feed('not json');
-      await run(['record', '--hook']);
-      expect(process.exitCode).toBe(0);
+      for (const junk of ['not json', 'null', '[]', '"text"', JSON.stringify({ tool_name: 'Edit', tool_input: null }), JSON.stringify({ tool_name: 'Edit', tool_input: { file_path: 7 } })]) {
+        feed(junk);
+        process.exitCode = undefined;
+        await run(['record', '--hook']);
+        expect(process.exitCode).toBe(0);
+      }
     } finally {
       Object.defineProperty(process, 'stdin', stdin);
     }

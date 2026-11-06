@@ -15,7 +15,7 @@ import path from 'node:path';
 import type { AccessPolicy, Sensitivity } from './access.js';
 import { SENSITIVITIES } from './access.js';
 import { KINDS, SOURCES, type BrainConfig, type Kind, type Source } from './config.js';
-import { eventsDir } from './events.js';
+import { EVENT_LINE_MAX, eventsDir } from './events.js';
 import { commitsSince, findRepo, headCommit, isAncestor, type GitRepo } from './git.js';
 import { dateFromName, parseNote, stringList, type Link } from './markdown.js';
 import { recomputeWeights } from './memory.js';
@@ -531,8 +531,6 @@ function resolveLinks(ix: IndexContext, files: ReadonlySet<string>, only: Readon
 
 /** Where the meta table keeps what each event file's last line read looked like. */
 const EVENT_TAIL = 'events_tail:';
-/** The most rows one line stands for, its notes times its run. A line claiming more is cut to this. */
-const EVENT_LINE_MAX = 1000;
 
 /** A fingerprint of the bytes just before `offset`: the end of the last line read. */
 function tailOf(file: string, offset: number): string {
@@ -576,13 +574,11 @@ function ingestEvents(ix: IndexContext): number {
   const { store, root } = ix;
   const dir = eventsDir(root);
   if (!existsSync(dir)) return 0;
-  const files: { rel: string; size: number }[] = [];
+  const names: string[] = [];
   for (const host of readdirSync(dir, { withFileTypes: true })) {
     if (!host.isDirectory()) continue;
     for (const entry of readdirSync(path.join(dir, host.name), { withFileTypes: true })) {
-      if (!entry.isFile() || !entry.name.endsWith('.jsonl')) continue;
-      const rel = `${host.name}/${entry.name}`;
-      files.push({ rel, size: statSync(path.join(dir, rel)).size });
+      if (entry.isFile() && entry.name.endsWith('.jsonl')) names.push(`${host.name}/${entry.name}`);
     }
   }
   const insert = store.db.prepare('INSERT INTO events(time, actor, verb, path, session, from_path, query) VALUES (?, ?, ?, ?, ?, ?, ?)');
@@ -592,13 +588,22 @@ function ingestEvents(ix: IndexContext): number {
     // Offsets are read inside the write lock, so two processes never read the same lines.
     const offsets = new Map<string, number>();
     for (const row of store.db.prepare('SELECT file, offset FROM event_files').all() as { file: string; offset: number }[]) offsets.set(row.file, row.offset);
-    // A file that shrank, or whose last line read is no longer what it was, was rewritten
-    // (by hand, or by git): start the events over, since nothing says which lines are new.
-    const rewritten = files.some((file) => {
+    // Sizes taken under the same lock as the offsets: one taken before it could be older
+    // than an offset another process has since moved past, and look like a file that shrank.
+    const files: { rel: string; size: number }[] = [];
+    let rewritten = false;
+    for (const rel of names) {
+      try { files.push({ rel, size: statSync(path.join(dir, rel)).size }); } catch { rewritten = true; }
+    }
+    const present = new Set(files.map((file) => file.rel));
+    // A file that shrank, went away, or whose last line read is no longer what it was, was
+    // rewritten (by hand, or by git): start the events over, since nothing says which lines are new.
+    rewritten ||= [...offsets.keys()].some((rel) => !present.has(rel)) || files.some((file) => {
       const offset = offsets.get(file.rel) ?? 0;
       if (offset > file.size) return true;
       const tail = store.meta(`${EVENT_TAIL}${file.rel}`);
-      return offset > 0 && tail !== null && tail !== tailOf(path.join(dir, file.rel), offset);
+      if (offset === 0 || tail === null) return false;
+      try { return tail !== tailOf(path.join(dir, file.rel), offset); } catch { return true; }
     });
     if (rewritten) {
       store.db.exec(`DELETE FROM events; DELETE FROM event_files; DELETE FROM meta WHERE key LIKE '${EVENT_TAIL}%';`);
@@ -607,11 +612,18 @@ function ingestEvents(ix: IndexContext): number {
     for (const file of files) {
       const offset = offsets.get(file.rel) ?? 0;
       if (file.size <= offset) continue;
-      const fd = openSync(path.join(dir, file.rel), 'r');
       const buffer = Buffer.alloc(file.size - offset);
-      try { readSync(fd, buffer, 0, buffer.length, offset); } finally { closeSync(fd); }
+      let tail: string;
+      try {
+        const fd = openSync(path.join(dir, file.rel), 'r');
+        try { readSync(fd, buffer, 0, buffer.length, offset); } finally { closeSync(fd); }
+      } catch {
+        // Gone since it was listed: the next pass finds it missing and starts over.
+        continue;
+      }
       const end = buffer.lastIndexOf(0x0a);
       if (end < 0) continue;
+      try { tail = tailOf(path.join(dir, file.rel), offset + end + 1); } catch { continue; }
       for (const line of buffer.subarray(0, end).toString('utf8').split('\n')) {
         if (!line.trim()) continue;
         let event: Record<string, unknown>;
@@ -622,7 +634,7 @@ function ingestEvents(ix: IndexContext): number {
         }
       }
       setOffset.run(file.rel, offset + end + 1);
-      store.setMeta(`${EVENT_TAIL}${file.rel}`, tailOf(path.join(dir, file.rel), offset + end + 1));
+      store.setMeta(`${EVENT_TAIL}${file.rel}`, tail);
     }
   });
   return count;

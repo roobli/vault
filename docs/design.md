@@ -140,15 +140,17 @@ Reads are not in git, so they are recorded. One JSON object per line in
 Files are per host, so two machines syncing the vault never conflict on them.
 Unknown fields are kept and ignored. The index reads each file from the byte
 offset it reached last time, and keeps a fingerprint of the bytes just before
-it: a file that shrank, or whose fingerprint no longer matches (rewritten by
-hand or by git), is read again from the start, with every other file.
+it: a file that shrank, went away, or whose fingerprint no longer matches
+(rewritten by hand or by git), is read again from the start, with every other
+file. Sizes are taken under the same lock as the offsets, so another process
+reading at the same moment never makes a file look shorter than it is.
 
 Two rules keep the files short. One call is one line: a recall that returns
 eight notes writes `paths` with eight entries, not eight lines. And a writer
 that lives a while (Noto, an MCP server) counts a repeat rather than writing
 it again: the same event (actor, verb, notes, session, link, cue) within a
 minute of the last of its run is added to a `repeat` line, written when the
-run ends, while the first is written at once so the index sees it straight
+run ends or reaches the 1000 rows a reader counts for one line, while the first is written at once so the index sees it straight
 away. Lines already written are never changed. On the first real vault this
 cut 908 lines to 244, nearly all of it from recalls.
 
@@ -175,7 +177,10 @@ lets it say so: it appends a line in the vault each note is in, opens no
 index, and passes over anything that is not a note in a folder that keeps
 memory. `noto-vault record --hook` reads a tool hook's JSON on stdin (Claude
 Code's `PostToolUse`: `Read` is a read, `Write`, `Edit`, `MultiEdit` and
-`NotebookEdit` are writes) and never fails the agent's step. Note Info then
+`NotebookEdit` are writes) and never fails the agent's step. Only an agent's
+hook sends such a payload, so it is never recorded as the person's: it is the
+agent the environment names, or `claude-code`, since a hook may not be given
+the variables the agent's own commands get. Note Info then
 lists the agents that wrote a note beside its commits. The commit itself
 stays the person's: nothing is added to commit messages.
 

@@ -53,6 +53,9 @@ export const ACTOR_NAME = /^[A-Za-z0-9._-]{1,64}$/;
 /** The same event again within this long of the last of its run is counted on the run's line. */
 export const REPEAT_MS = 60_000;
 
+/** The most rows one line stands for, its notes times its run: a reader cuts a line claiming more, so a writer never writes one. */
+export const EVENT_LINE_MAX = 1000;
+
 /** A host name that is safe as a folder name. */
 export function hostName(): string {
   return os.hostname().replace(/\.local$/, '').replace(/[^A-Za-z0-9._-]+/g, '-').toLowerCase() || 'host';
@@ -106,9 +109,17 @@ export function recordEvents(root: string, events: readonly VaultEvent[], host: 
   }
   lines.push(lineOf(run, now));
   const file = eventFile(root, host, new Date(events[0]!.time ?? now));
+  const text = `${lines.join('\n')}\n`;
+  // One call when the folders are there, as they are after the first line; an editor does this on every open.
+  try {
+    appendFileSync(file, text, 'utf8');
+    return true;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+  }
   // Each folder made only inside one that is there, so a .noto taken away a moment ago is never made anew.
   if (!folderIn(eventsDir(root)) || !folderIn(path.dirname(file))) return false;
-  appendFileSync(file, `${lines.join('\n')}\n`, 'utf8');
+  appendFileSync(file, text, 'utf8');
   return true;
 }
 
@@ -194,7 +205,9 @@ export class EventLog {
       if (this.run.more === 0) this.run.firstMore = now;
       this.run.more += 1;
       this.run.last = now;
-      this.arm();
+      // A run as long as a line may count is written, and the next repeat begins a new one.
+      if (this.run.more >= Math.floor(EVENT_LINE_MAX / this.run.paths.length)) this.flush();
+      else this.arm();
       return true;
     }
     this.flush();
