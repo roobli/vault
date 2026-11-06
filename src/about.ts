@@ -131,7 +131,8 @@ export function about(vault: Vault, ref: string, options: AboutOptions = {}): Ab
   const db = vault.store.db;
   const rel = note.path;
   const now = options.now ?? Date.now();
-  const limit = options.limit ?? 8;
+  // A whole number, so that SQL's LIMIT and the slices below cut every list the same way.
+  const limit = options.limit !== undefined && Number.isFinite(options.limit) ? Math.max(0, Math.floor(options.limit)) : 8;
   const owner = vault.principal.owner;
   const weightsAt = Number(vault.store.meta('weights_at') ?? now);
   const visible = (path: string, sensitivity: Sensitivity) => vault.canSee({ path, sensitivity });

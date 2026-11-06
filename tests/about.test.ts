@@ -182,6 +182,11 @@ describe('about', () => {
       expect(info.leadsHere).toContainEqual({ from: null, query: '审计', count: 1 });
       expect(info.writes).toEqual({ commits: 2, appends: 1 });
       expect(about(vault, ARGUS, { limit: 1 }).reads).toEqual([{ day: '2026-11-04', count: 5 }]);
+      // A limit from a command line may be anything: a fraction counts down, below zero is none.
+      expect(about(vault, ARGUS, { limit: 1.5 }).readers).toHaveLength(1);
+      const none = about(vault, ARGUS, { limit: -1 });
+      expect([none.linksHere, none.reads, none.readers, none.leadsHere, none.aboutSame].every((list) => list.length === 0)).toBe(true);
+      expect(none.linksHereCount).toBe(4);
       // A note an event came from is where its old path leads now; a path that leads nowhere stays as written.
       expect(about(vault, 'Knowledge/audit.md').leadsHere).toEqual([{ from: 'Plain', query: null, count: 1 }, { from: IDEA, query: null, count: 1 }]);
       // What happened at the note's old path is the note's; the commit that only moved it is not a write.
