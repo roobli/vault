@@ -49,9 +49,15 @@ interface Row {
   last_read: number | null;
 }
 
-/** A LIKE pattern for every path under `folder`, with LIKE's own characters taken literally. */
-function under(folder: string): string {
-  return folder === '' ? '%' : `${folder.replace(/[\\%_]/g, (ch) => `\\${ch}`)}/%`;
+/**
+ * A condition on `column` for every path under `folder`, and its values: a
+ * range of the index's own byte order, from `folder/` up to `folder0`, `0`
+ * being the character after `/`. Exact case, as the folder is on disk (LIKE
+ * folds ASCII case, which would take `notes/` for `Notes/`). The whole vault
+ * is every path, with no condition.
+ */
+function under(folder: string, column: string): { sql: string; values: string[] } {
+  return folder === '' ? { sql: '1', values: [] } : { sql: `(${column} >= ? AND ${column} < ?)`, values: [`${folder}/`, `${folder}0`] };
 }
 
 export function folderAbout(vault: Vault, folder: string, options: FolderAboutOptions = {}): FolderAbout {
@@ -60,9 +66,11 @@ export function folderAbout(vault: Vault, folder: string, options: FolderAboutOp
   const limit = options.limit ?? 8;
   const now = options.now ?? Date.now();
   const db = vault.store.db;
-  const pattern = under(name);
+  const note = under(name, 'n.path');
+  const src = under(name, 'src');
+  const resolved = under(name, 'resolved');
   const rows = (db.prepare(`SELECT n.path, n.title, n.kind, n.sensitivity, h.value, h.reads, h.last_read
-    FROM notes n LEFT JOIN heat h ON h.path = n.path WHERE n.path LIKE ? ESCAPE '\\'`).all(pattern) as unknown as Row[])
+    FROM notes n LEFT JOIN heat h ON h.path = n.path WHERE ${note.sql}`).all(...note.values) as unknown as Row[])
     .filter((row) => vault.canSee(row));
   const at = Number(vault.store.meta('weights_at') ?? now);
   const notes: FolderNote[] = rows.map((row) => ({
@@ -77,7 +85,7 @@ export function folderAbout(vault: Vault, folder: string, options: FolderAboutOp
 
   const linked = new Set<string>();
   for (const row of db.prepare(`SELECT DISTINCT src, resolved FROM links WHERE resolved IS NOT NULL AND kind != 'img'
-    AND (src LIKE ? ESCAPE '\\' OR resolved LIKE ? ESCAPE '\\')`).all(pattern, pattern) as { src: string; resolved: string }[]) {
+    AND (${src.sql} OR ${resolved.sql})`).all(...src.values, ...resolved.values) as { src: string; resolved: string }[]) {
     if (row.src === row.resolved) continue;
     linked.add(row.src);
     linked.add(row.resolved);
@@ -85,7 +93,7 @@ export function folderAbout(vault: Vault, folder: string, options: FolderAboutOp
   const orphans = notes.filter((note) => !linked.has(note.path)).sort((left, right) => left.path.localeCompare(right.path));
 
   const broken = (db.prepare(`SELECT src FROM links WHERE resolved IS NULL AND kind != 'img'
-    AND NOT (kind = 'md' AND target LIKE '/%') AND src LIKE ? ESCAPE '\\'`).all(pattern) as { src: string }[])
+    AND NOT (kind = 'md' AND target LIKE '/%') AND ${src.sql}`).all(...src.values) as { src: string }[])
     .filter((row) => seen.has(row.src)).length;
 
   const top = (score: (note: FolderNote) => number) => notes.filter((note) => score(note) > 0)

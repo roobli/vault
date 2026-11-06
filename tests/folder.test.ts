@@ -53,6 +53,12 @@ describe('a folder', () => {
       expect(about.orphans).toEqual({ count: 1, items: [expect.objectContaining({ path: 'Areas/A/secret.md' })] });
       expect(about.broken).toBe(1);
       expect(folderAbout(vault, '').notes).toBe(6);
+      // A folder is its exact name: on a disk that tells case apart, areas/a is another folder.
+      vault.store.db.prepare(`INSERT INTO notes(path, hash, title, kind, sensitivity, chars, frontmatter, headings, tags, aliases, origins)
+        VALUES ('areas/a/lower.md', 'x', 'Lower', 'note', 'open', 1, '{}', '[]', '[]', '[]', '{}')`).run();
+      expect(folderAbout(vault, 'Areas/A').notes).toBe(4);
+      expect(folderAbout(vault, 'areas/a').notes).toBe(1);
+      expect(folderAbout(vault, '').notes).toBe(7);
     } finally {
       vault.close();
     }
