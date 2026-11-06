@@ -5,6 +5,7 @@ export { indexPath } from './store.js';
 export { initVault } from './init.js';
 export type { AboutNote, AboutOptions, Origin, Traced } from './about.js';
 export { recall, excerptOf } from './recall.js';
+export { formatRecall } from './format.js';
 export type { RecallItem, RecallPack, RecallOptions } from './recall.js';
 export { dismiss, dismissals, prepare, suggest, toChanges, undismiss } from './suggest.js';
 export type { Dismissal, Suggestion, SuggestionType, SuggestOptions } from './suggest.js';
