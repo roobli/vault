@@ -191,6 +191,15 @@ Recall is lazy: it records a `recall` event only for the notes it returns.
 owner unless `NOTO_VAULT_KEY` names another principal. The MCP server acts as
 the principal its key names, or as `default`.
 
+The file is the person's, often with comments, so the tools that change it
+(`key add`, `key revoke`, and an editor through `addAgent`, `revokeAgent`
+and `setFolderSensitivity`) change only the lines they are about. A revoked
+agent keeps its block, with `keys: []` and a `revoked:` time, so a list can
+say when; `default` is revoked by giving it nothing to read. A folder's
+privacy is its own pattern in one list, added only when the default or a
+folder around it would not give that level already. A running MCP server
+reads the file again before its next answer once it changes.
+
 ```yaml
 sensitivity:
   default: open

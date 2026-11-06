@@ -42,7 +42,12 @@ An agent gets a key, and the key names what it may do:
 noto-vault key add claude-code      # prints the key once, adds the principal to .noto/access.yaml
 claude mcp add noto-vault -e NOTO_VAULT_ROOT=$HOME/my-vault -e NOTO_VAULT_KEY=<key> \
   -- node /path/to/vault/bin/noto-vault.mjs mcp
+noto-vault key revoke claude-code   # takes its keys back; a running server refuses it on its next request
 ```
+
+An editor changes the same file through `addAgent`, `revokeAgent` and
+`setFolderSensitivity`, which edit only the lines they are about, so the
+file's comments stay.
 
 The MCP server speaks both the `initialize` handshake (2025-11-25 and earlier)
 and per-request metadata (2026-07-28). Its tools are the eight verbs: `recall`,

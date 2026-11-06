@@ -4,18 +4,17 @@
  * `NOTO_VAULT_KEY` names another principal.
  */
 
-import { randomBytes } from 'node:crypto';
-import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { createInterface } from 'node:readline/promises';
 import { parseArgs } from 'node:util';
 import { about } from './about.js';
-import { accessPath, keyHash } from './access.js';
-import { ACCESS_TEMPLATE, initVault } from './init.js';
+import { initVault } from './init.js';
 import { formatAbout, formatRead, formatRecall, formatSearch, formatSuggestion, formatSuggestions, plainEmphasis, terminalEmphasis } from './format.js';
 import { serve } from './mcp.js';
 import { recall } from './recall.js';
 import { dismiss, suggest, toChanges, type Suggestion, type SuggestionType } from './suggest.js';
+import { addAgent, revokeAgent } from './policy.js';
 import { AccessError, ConflictError, Vault } from './vault.js';
 import { parseYaml } from './yaml.js';
 
@@ -42,6 +41,7 @@ const HELP = `noto-vault: a vault of Markdown notes as memory
   noto-vault link <from> <to>           a typed relation line  [--rel related]
   noto-vault supersede <old> <new>      mark old as superseded by new
   noto-vault key add <principal>        make a key for an agent and add it to .noto/access.yaml
+  noto-vault key revoke <principal>     take an agent's keys back
   noto-vault eval <cases.yaml>          how well recall finds what it should  [--k 5] [--search]
   noto-vault mcp [--owner]              serve the vault over MCP on stdio
 
@@ -96,48 +96,25 @@ async function main(argv: string[]): Promise<number> {
   }
 
   if (command === 'key') {
-    if (rest[0] !== 'add' || !rest[1] || !/^[A-Za-z0-9._-]+$/.test(rest[1])) {
-      console.error('Usage: noto-vault key add <principal>   (letters, digits, . _ -)');
+    const name = rest[1];
+    if (!['add', 'revoke'].includes(rest[0] ?? '') || !name) {
+      console.error('Usage: noto-vault key add <principal>   (letters, digits, . _ -)\n       noto-vault key revoke <principal>');
       return 2;
     }
-    const name = rest[1];
-    const key = randomBytes(24).toString('base64url');
-    const file = accessPath(root);
-    const text = existsSync(file) ? readFileSync(file, 'utf8') : ACCESS_TEMPLATE;
-    const parsed = parseYaml(text) as { principals?: Record<string, unknown> } | null;
-    if (parsed?.principals && name in parsed.principals) {
-      console.log(`${name} is already in .noto/access.yaml. Add this to its keys list:\n  ${keyHash(key)}\n\nThe key, shown once:\n  ${key}`);
+    if (rest[0] === 'revoke') {
+      const changed = revokeAgent(root, name);
+      console.log(changed ? `Took ${name}'s keys back; a running server stops answering it on its next request.` : `.noto/access.yaml names no ${name}.`);
+      return changed ? 0 : 1;
+    }
+    try {
+      // What an agent added here may do: read private notes too, and propose changes.
+      const { key } = addAgent(root, { name, reads: 'private', may: 'propose' });
+      console.log(`Added ${name} to .noto/access.yaml. The key, shown once; give it to the agent as NOTO_VAULT_KEY:\n  ${key}`);
       return 0;
+    } catch (error) {
+      console.error((error as Error).message);
+      return 1;
     }
-    const block = [
-      `  ${name}:`,
-      `    keys: [${keyHash(key)}]`,
-      '    read: ["**"]',
-      '    max_sensitivity: private',
-      '    # Paths it may append to and write directly; everything else it proposes.',
-      '    append: []',
-      '    write: []',
-      '    verbs: [read, search, recall, append, propose]',
-      '',
-    ].join('\n');
-    if (!existsSync(file)) writeFileSync(file, ACCESS_TEMPLATE);
-    const current = readFileSync(file, 'utf8');
-    if (!/^principals:\s*$/m.test(current)) {
-      appendFileSync(file, `${current.endsWith('\n') ? '' : '\n'}\nprincipals:\n${block}`);
-    } else {
-      // At the end of the principals section: before the next key that starts a line.
-      const lines = current.split('\n');
-      const start = lines.findIndex((line) => /^principals:\s*$/.test(line));
-      let end = lines.length;
-      for (let at = start + 1; at < lines.length; at += 1) {
-        if (/^[^\s#]/.test(lines[at]!)) { end = at; break; }
-      }
-      while (end > start + 1 && lines[end - 1]!.trim() === '') end -= 1;
-      lines.splice(end, 0, ...block.replace(/\n$/, '').split('\n'));
-      writeFileSync(file, lines.join('\n'));
-    }
-    console.log(`Added ${name} to .noto/access.yaml. The key, shown once; give it to the agent as NOTO_VAULT_KEY:\n  ${key}`);
-    return 0;
   }
 
   const key = process.env.NOTO_VAULT_KEY;
