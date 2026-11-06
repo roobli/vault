@@ -1,13 +1,14 @@
 export { Vault, AccessError, ConflictError, snippetOf } from './vault.js';
 export type { NoteRow, NoteHeat, ReadResult, SearchHit, SearchOptions, OpenOptions, GraphExport, GraphNode, GraphEdge } from './vault.js';
 export { about } from './about.js';
+export { indexPath } from './store.js';
 export { initVault } from './init.js';
 export type { AboutNote, AboutOptions, Origin, Traced } from './about.js';
 export { recall, excerptOf } from './recall.js';
 export type { RecallItem, RecallPack, RecallOptions } from './recall.js';
 export { dismiss, dismissals, prepare, suggest, toChanges, undismiss } from './suggest.js';
 export type { Dismissal, Suggestion, SuggestionType, SuggestOptions } from './suggest.js';
-export { parseNote, extractLinks, splitFrontmatter, maskCode, maskFences, DEFAULT_RELATIONS } from './markdown.js';
+export { parseNote, extractLinks, splitFrontmatter, frontmatterOf, maskCode, maskFences, DEFAULT_RELATIONS } from './markdown.js';
 export type { Link, LinkKind, Heading, ParsedNote } from './markdown.js';
 export { resolveLink, buildResolveIndex, wikiLinkTo, aliasKey } from './resolve.js';
 export type { ResolveIndex, Resolution } from './resolve.js';

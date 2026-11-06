@@ -20,9 +20,10 @@
  */
 
 import { randomBytes } from 'node:crypto';
-import { existsSync, lstatSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { closeSync, existsSync, lstatSync, mkdirSync, openSync, readFileSync, readSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { accessPath, keyHash, parseAccess, SENSITIVITIES, type Sensitivity } from './access.js';
+import { frontmatterOf } from './markdown.js';
 import { parseYamlMap, scalar, splitKey, stripComment, type YamlValue } from './yaml.js';
 
 /** What an agent may do, from least to most. */
@@ -467,4 +468,61 @@ export function agentList(root: string): AgentEntry[] {
       implicit: !Object.hasOwn(entriesOf, principal.name),
     };
   });
+}
+
+/** What the policy says of folders, for an editor to draw: the default, and each folder given a level of its own. */
+export interface PrivacyMarks {
+  readonly default: Sensitivity;
+  /** Folders named by a pattern of their own (`Work/`, not `**\/drafts`), with the level that pattern gives them, in the file's order. */
+  readonly folders: readonly { readonly folder: string; readonly level: Sensitivity }[];
+}
+
+/**
+ * The folders whose privacy the policy sets by name. A pattern with a
+ * wildcard names no one folder and is left out; its notes still have their
+ * level, and a folder's Privacy menu still says it.
+ */
+export function privacyMarks(root: string): PrivacyMarks {
+  const text = readText(root);
+  const access = parseAccess(text);
+  const levels = parseYamlMap(text).sensitivity;
+  const named = new Map<string, Sensitivity>();
+  for (const level of SENSITIVITIES) {
+    for (const pattern of list(isMap(levels) ? levels[level] : undefined)) {
+      const folder = pattern.replace(/\\/g, '/').replace(/^\.?\//, '').replace(/\/(\*\*)?$/, '');
+      if (folder === '' || /[*?]/.test(folder) || named.has(folder)) continue;
+      // The level the folder ends up with, which a longer pattern inside another list may change.
+      named.set(folder, access.sensitivityOf(`${folder}/note.md`));
+    }
+  }
+  return { default: access.defaultSensitivity, folders: [...named].map(([folder, level]) => ({ folder, level })) };
+}
+
+/** The first part of a note, where its frontmatter is: enough for any frontmatter a person writes. */
+const HEAD_BYTES = 64 * 1024;
+
+/**
+ * How private a note is by its own frontmatter, beside what its folder
+ * gives it. A note can only be made stricter than its folder (the stricter
+ * of the two wins), so `stricter` says whether the note's own word is what
+ * decides. The vault's scripts may make it stricter still; they run in the
+ * vault, not here.
+ */
+export function noteSensitivity(root: string, rel: string): { folder: Sensitivity; own: Sensitivity | null; stricter: boolean } {
+  const folder = parseAccess(readText(root)).sensitivityOf(rel);
+  let head = '';
+  try {
+    const fd = openSync(path.join(root, rel), 'r');
+    try {
+      const buffer = Buffer.alloc(HEAD_BYTES);
+      head = buffer.subarray(0, readSync(fd, buffer, 0, HEAD_BYTES, 0)).toString('utf8');
+    } finally {
+      closeSync(fd);
+    }
+  } catch {
+    return { folder, own: null, stricter: false };
+  }
+  const value = frontmatterOf(head).sensitivity;
+  const own = typeof value === 'string' && (SENSITIVITIES as readonly string[]).includes(value) ? value as Sensitivity : null;
+  return { folder, own, stricter: own !== null && SENSITIVITIES.indexOf(own) > SENSITIVITIES.indexOf(folder) };
 }

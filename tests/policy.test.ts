@@ -3,7 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { keyHash, loadAccess } from '../src/access.js';
-import { addAgent, agentList, folderSensitivity, PolicyEditError, revokeAgent, setFolderSensitivity } from '../src/policy.js';
+import { addAgent, agentList, folderSensitivity, noteSensitivity, PolicyEditError, privacyMarks, revokeAgent, setFolderSensitivity } from '../src/policy.js';
 
 let root: string;
 const policyFile = () => path.join(root, '.noto', 'access.yaml');
@@ -111,6 +111,31 @@ describe('how private a folder is', () => {
     expect(folderSensitivity(root, 'Work/Public')).toEqual({ level: 'open', own: true });
     expect(folderSensitivity(root, 'Work/Deep')).toEqual({ level: 'private', own: false });
     expect(folderSensitivity(root, 'Elsewhere')).toEqual({ level: 'open', own: false });
+  });
+});
+
+describe('what an editor draws', () => {
+  it('names the folders given a level of their own, with the level they end up with', () => {
+    setFolderSensitivity(root, 'Work/Public', 'open');
+    writeFileSync(policyFile(), policy().replace('  private: ["Work/"]', '  private: ["Work/", "**/drafts/"]'));
+    expect(privacyMarks(root)).toEqual({
+      default: 'open',
+      folders: [{ folder: 'Work/Public', level: 'open' }, { folder: 'Work', level: 'private' }, { folder: 'Diary', level: 'sealed' }],
+    });
+    rmSync(policyFile());
+    expect(privacyMarks(root)).toEqual({ default: 'open', folders: [] });
+  });
+
+  it('says when a note\'s own frontmatter makes it stricter than its folder', () => {
+    const note = (rel: string, text: string) => { mkdirSync(path.dirname(path.join(root, rel)), { recursive: true }); writeFileSync(path.join(root, rel), text); };
+    note('Ideas/plan.md', '---\ntitle: Plan\nsensitivity: private\n---\n# Plan\n');
+    note('Work/budget.md', '---\nsensitivity: open\n---\n# Budget\n');
+    note('Ideas/plain.md', '# Plain\n');
+    expect(noteSensitivity(root, 'Ideas/plan.md')).toEqual({ folder: 'open', own: 'private', stricter: true });
+    // A note cannot open itself up inside a private folder.
+    expect(noteSensitivity(root, 'Work/budget.md')).toEqual({ folder: 'private', own: 'open', stricter: false });
+    expect(noteSensitivity(root, 'Ideas/plain.md')).toEqual({ folder: 'open', own: null, stricter: false });
+    expect(noteSensitivity(root, 'Ideas/gone.md')).toEqual({ folder: 'open', own: null, stricter: false });
   });
 });
 

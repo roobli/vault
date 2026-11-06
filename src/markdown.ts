@@ -55,6 +55,21 @@ export function splitFrontmatter(text: string): { frontmatter: string; body: str
   return { frontmatter: text.slice(0, cut), body: text.slice(cut) };
 }
 
+/**
+ * A note's frontmatter as a map: an empty one when it has none, or when it
+ * cannot be read, which is no reason to leave the note out. Takes the note's
+ * text, or the frontmatter `splitFrontmatter` cut from it.
+ */
+export function frontmatterOf(text: string): Record<string, YamlValue> {
+  const { frontmatter } = splitFrontmatter(text);
+  if (!frontmatter) return {};
+  try {
+    return parseYamlMap(frontmatter.replace(/^---[^\n]*\n/, '').replace(/\n---[^\n]*\n?$/, '\n'));
+  } catch {
+    return {};
+  }
+}
+
 /** Fenced code replaced by spaces, so offsets and line numbers stay valid. */
 export function maskFences(text: string): string {
   return text.replace(/```[\s\S]*?```|~~~[\s\S]*?~~~/g, (block) => block.replace(/[^\n]/g, ' '));
@@ -162,13 +177,7 @@ export interface ParseOptions {
 export function parseNote(path: string, text: string, options: ParseOptions = {}): ParsedNote {
   const vocabulary = options.relations ?? DEFAULT_RELATIONS;
   const { frontmatter, body } = splitFrontmatter(text);
-  let fm: Record<string, YamlValue> = {};
-  try {
-    if (frontmatter) fm = parseYamlMap(frontmatter.replace(/^---[^\n]*\n/, '').replace(/\n---[^\n]*\n?$/, '\n'));
-  } catch {
-    // Frontmatter that cannot be read is no reason to leave the note out.
-    fm = {};
-  }
+  const fm = frontmatterOf(frontmatter);
   const bodyStart = frontmatter.length;
 
   // Line starts, for line numbers and relation lines.

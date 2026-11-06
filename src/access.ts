@@ -36,6 +36,8 @@ export interface AccessPolicy {
   readonly owner: Principal;
   /** The sensitivity the policy gives a path, before scripts and frontmatter. */
   sensitivityOf(rel: string): Sensitivity;
+  /** The level of a path no pattern names: `sensitivity.default`, or open. */
+  readonly defaultSensitivity: Sensitivity;
   /** The `sensitivity:` pattern that gives a path its level; null when the default does. */
   sensitivityRule(rel: string): string | null;
   /** The principal a key names; no key is `default`. Throws on an unknown key. */
@@ -124,6 +126,7 @@ export function parseAccess(text: string): AccessPolicy {
     owner,
     text,
     sensitivityOf,
+    defaultSensitivity: fallback,
     sensitivityRule,
     principal: (name) => (name === 'owner' ? owner : principals.get(name)),
     principals: [...principals.values()],
