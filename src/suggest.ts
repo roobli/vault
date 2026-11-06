@@ -468,47 +468,100 @@ function mentionMatcher(vault: Vault, table: NameTable): NonNullable<NameTable['
   return table.matcher;
 }
 
+/** The mentions found in one note's text, longest first at each place and none overlapping: [start, end, pattern]. */
+type Hits = readonly (readonly [number, number, number])[];
+
+/**
+ * Each note's scan, kept against its hash for one set of names (one
+ * matcher), so asking again after a few notes changed reads only those.
+ * Asking about one note still counts every note: how many notes use a name is
+ * what says whether it is a reference or a word, and Review and the note in
+ * front must agree on that.
+ */
+const scans = new WeakMap<Vault, { readonly matcher: object; readonly byPath: Map<string, { readonly hash: string; readonly hits: Hits }> }>();
+
+function scanCache(vault: Vault, matcher: object): Map<string, { readonly hash: string; readonly hits: Hits }> {
+  const kept = scans.get(vault);
+  if (kept && kept.matcher === matcher) return kept.byPath;
+  const byPath = new Map<string, { readonly hash: string; readonly hits: Hits }>();
+  scans.set(vault, { matcher, byPath });
+  return byPath;
+}
+
+/** Where a note's running text names another note: no frontmatter, code, headings, or text that is already a link. */
+function scanText(text: string, from: NoteLite, matcher: Matcher, targets: readonly Target[]): Hits {
+  const { frontmatter } = splitFrontmatter(text);
+  let masked = maskCode(text);
+  masked = ' '.repeat(frontmatter.length) + masked.slice(frontmatter.length);
+  masked = masked.replace(/^#{1,6} .*$/gm, (line) => ' '.repeat(line.length));
+  // Links, tags, URLs and file paths written as text: none of them is prose naming a note.
+  // Links go first and whole: a path matched from the prose before one would
+  // swallow its opening brackets and leave the label to be read as prose.
+  const blank = (part: string) => ' '.repeat(part.length);
+  masked = masked.replace(/!?\[\[[^\]\n]*\]\]|!?\[[^\]\n]*\]\([^)\n]*\)|<[^>\n]+>|https?:\/\/\S+/g, blank);
+  masked = masked.replace(/[^\s()（）"'`[\]|，。、；：！？「」《》]*\/[^\s()（）"'`[\]|，。、；：！？「」《》]*|\S+\.(?:md|markdown)\b/g, blank);
+  const lower = lowerKeepLength(masked);
+  const hits: [number, number, number][] = [];
+  for (const hit of matcher.scan(lower)) {
+    const target = targets[hit[2]]!;
+    if (target.weight === 0 || target.path === from.path) continue;
+    if (!hasCjk(target.name) && (isWordChar(lower[hit[0] - 1]) || isWordChar(lower[hit[1]]))) continue;
+    hits.push(hit);
+  }
+  // Longest first at each place, then no overlaps.
+  hits.sort((left, right) => left[0] - right[0] || (right[1] - right[0]) - (left[1] - left[0]));
+  const kept: [number, number, number][] = [];
+  let reach = -1;
+  for (const hit of hits) {
+    if (hit[0] < reach) continue;
+    reach = hit[1];
+    kept.push(hit);
+  }
+  return kept;
+}
+
 function mentions(vault: Vault, table: NameTable, sources: readonly NoteLite[], links: (a: string, b: string) => boolean, heat: (rel: string) => number): Suggestion[] {
   const { notes, byPath } = table;
-  const { matcher, targets, index } = mentionMatcher(vault, table);
-  const perNote: { from: NoteLite; start: number; end: number; pattern: number; text: string }[] = [];
+  const built = mentionMatcher(vault, table);
+  const { matcher, targets, index } = built;
+  // Kept only for an index that says when its names change; an older one is scanned afresh.
+  const cache = table.version === null ? new Map<string, { readonly hash: string; readonly hits: Hits }>() : scanCache(vault, built);
+  const hashes = new Map((vault.store.db.prepare('SELECT path, hash FROM notes').all() as { path: string; hash: string }[]).map((row) => [row.path, row.hash]));
+  const texts = new Map<string, string>();
+  const scan = (note: NoteLite): Hits => {
+    const hash = hashes.get(note.path) ?? '';
+    const kept = cache.get(note.path);
+    if (kept && kept.hash === hash) return kept.hits;
+    const text = vault.textOf(note.path);
+    if (text === null) return [];
+    texts.set(note.path, text);
+    const hits = scanText(text, note, matcher, targets);
+    cache.set(note.path, { hash, hits });
+    return hits;
+  };
+  const textOf = (rel: string): string | null => texts.get(rel) ?? vault.textOf(rel);
+
+  // How many notes use each name, over every note the principal may see.
   const documentFrequency = new Map<number, number>();
-  for (const from of sources) {
+  for (const note of notes) {
     // A copy of someone else's text is kept as it was copied.
+    if (note.source === 'heard') continue;
+    for (const pattern of new Set(scan(note).map((hit) => hit[2]))) documentFrequency.set(pattern, (documentFrequency.get(pattern) ?? 0) + 1);
+  }
+  for (const path of cache.keys()) if (!byPath.has(path)) cache.delete(path);
+
+  // One suggestion per target per note, the first place it is named.
+  const perNote: { from: NoteLite; start: number; end: number; pattern: number; text: string }[] = [];
+  for (const from of sources) {
     if (from.source === 'heard') continue;
-    const text = vault.textOf(from.path);
-    if (text === null) continue;
-    const { frontmatter } = splitFrontmatter(text);
-    // Only running text: no frontmatter, code, headings, or text that is already a link.
-    let masked = maskCode(text);
-    masked = ' '.repeat(frontmatter.length) + masked.slice(frontmatter.length);
-    masked = masked.replace(/^#{1,6} .*$/gm, (line) => ' '.repeat(line.length));
-    // Links, tags, URLs and file paths written as text: none of them is prose naming a note.
-    // Links go first and whole: a path matched from the prose before one would
-    // swallow its opening brackets and leave the label to be read as prose.
-    const blank = (part: string) => ' '.repeat(part.length);
-    masked = masked.replace(/!?\[\[[^\]\n]*\]\]|!?\[[^\]\n]*\]\([^)\n]*\)|<[^>\n]+>|https?:\/\/\S+/g, blank);
-    masked = masked.replace(/[^\s()（）"'`[\]|，。、；：！？「」《》]*\/[^\s()（）"'`[\]|，。、；：！？「」《》]*|\S+\.(?:md|markdown)\b/g, blank);
-    const lower = lowerKeepLength(masked);
-    const hits: [number, number, number][] = [];
-    for (const hit of matcher.scan(lower)) {
-      const target = targets[hit[2]]!;
-      if (target.weight === 0 || target.path === from.path) continue;
-      if (!hasCjk(target.name) && (isWordChar(lower[hit[0] - 1]) || isWordChar(lower[hit[1]]))) continue;
-      hits.push(hit);
-    }
-    // Longest first at each place, then no overlaps; one suggestion per target per note.
-    hits.sort((left, right) => left[0] - right[0] || (right[1] - right[0]) - (left[1] - left[0]));
-    let reach = -1;
     const taken = new Set<string>();
-    const counted = new Set<number>();
-    for (const [start, end, pattern] of hits) {
-      if (start < reach) continue;
-      reach = end;
-      if (!counted.has(pattern)) { counted.add(pattern); documentFrequency.set(pattern, (documentFrequency.get(pattern) ?? 0) + 1); }
+    let text: string | null | undefined;
+    for (const [start, end, pattern] of scan(from)) {
       const target = targets[pattern]!;
       if (taken.has(target.path) || links(from.path, target.path)) continue;
       taken.add(target.path);
+      text ??= textOf(from.path);
+      if (text === null) break;
       perNote.push({ from, start, end, pattern, text });
     }
   }

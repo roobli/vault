@@ -100,6 +100,23 @@ describe('suggest', () => {
     }
   });
 
+  it('gives one note the same mentions, scored the same, as the whole folder does, and follows an edit to it', async () => {
+    const vault = await Vault.open(root, { owner: true });
+    try {
+      const from = 'Areas/Search/Design/notes.md';
+      const all = suggest(vault, { types: ['mention'] });
+      const one = suggest(vault, { types: ['mention'], from: [from] });
+      expect(one.length).toBeGreaterThan(0);
+      expect(one.map((item) => [item.id, item.score])).toEqual(all.filter((item) => item.from === from).map((item) => [item.id, item.score]));
+      // An edit to the note is read again; the others are not read at all.
+      write(from, '# Notes\n\n先读目标设计说明，再看学习方案。\n');
+      vault.refresh({ paths: [from] });
+      expect(mention(suggest(vault, { types: ['mention'], from: [from] }), from, 'Areas/Search/Design/学习方案.md')?.around).toEqual(['先读目标设计说明，再看', '学习方案', '。']);
+    } finally {
+      vault.close();
+    }
+  });
+
   it('keeps an id per kind and pair, and never suggests a dismissed one again', async () => {
     const owner = await Vault.open(root, { owner: true });
     const stranger = await Vault.open(root, {});
