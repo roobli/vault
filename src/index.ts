@@ -23,5 +23,5 @@ export type { VaultScript, Derived, ScriptNote, ScriptContext, ScriptSuggestion 
 export type { FileChange, Proposal, AcceptResult } from './git.js';
 export type { RefreshStats } from './indexer.js';
 export { indexText, matchExpression, queryPieces } from './tokenize.js';
-export { addAgent, agentList, revokeAgent, setFolderSensitivity } from './policy.js';
+export { addAgent, agentList, folderSensitivity, revokeAgent, setFolderSensitivity } from './policy.js';
 export type { AgentEntry, AgentReach, AgentSpec } from './policy.js';

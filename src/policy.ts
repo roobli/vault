@@ -244,6 +244,14 @@ export function setFolderSensitivity(root: string, folder: string, level: Sensit
   save(root, lines);
 }
 
+/** How private a folder is, and whether its own pattern says so (rather than the default or a folder around it). */
+export function folderSensitivity(root: string, folder: string): { level: Sensitivity; own: boolean } {
+  const name = folderOf(folder);
+  const access = parseAccess(read(root));
+  const rule = access.sensitivityRule(`${name}/note.md`);
+  return { level: access.sensitivityOf(`${name}/note.md`), own: rule !== null && [name, `${name}/`, `${name}/**`].includes(rule) };
+}
+
 /** The agents the policy names, `default` among them, in the file's order. */
 export function agentList(root: string): AgentEntry[] {
   const text = read(root);

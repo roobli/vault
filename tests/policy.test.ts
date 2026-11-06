@@ -3,7 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { loadAccess } from '../src/access.js';
-import { addAgent, agentList, revokeAgent, setFolderSensitivity } from '../src/policy.js';
+import { addAgent, agentList, folderSensitivity, revokeAgent, setFolderSensitivity } from '../src/policy.js';
 
 let root: string;
 const policyFile = () => path.join(root, '.noto', 'access.yaml');
@@ -108,5 +108,8 @@ describe('how private a folder is', () => {
     expect(loadAccess(root).sensitivityOf('Work/b.md')).toBe('private');
     expect(policy()).toContain('# Work is nobody');
     expect(() => setFolderSensitivity(root, '../x', 'sealed')).toThrow(/not a folder/);
+    expect(folderSensitivity(root, 'Work/Public')).toEqual({ level: 'open', own: true });
+    expect(folderSensitivity(root, 'Work/Deep')).toEqual({ level: 'private', own: false });
+    expect(folderSensitivity(root, 'Elsewhere')).toEqual({ level: 'open', own: false });
   });
 });
