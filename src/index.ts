@@ -23,7 +23,7 @@ export { loadConfig, parseConfig, DEFAULT_CONFIG, KINDS, SOURCES } from './confi
 export type { BrainConfig, Kind, Source } from './config.js';
 export { loadAccess, parseAccess, keyHash, VERBS, SENSITIVITIES } from './access.js';
 export type { AccessPolicy, Principal, Sensitivity, Verb } from './access.js';
-export { recordEvent, recordEvents, newSession, hostName } from './events.js';
+export { ACTOR_NAME, agentActor, EventLog, hostName, newSession, recordEvent, recordEvents, REPEAT_MS } from './events.js';
 export type { VaultEvent, EventVerb } from './events.js';
 export type { VaultScript, Derived, ScriptNote, ScriptContext, ScriptSuggestion } from './scripts.js';
 export type { FileChange, Proposal, AcceptResult } from './git.js';

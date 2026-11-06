@@ -152,3 +152,37 @@ describe('a server started for a folder that does not keep memory', () => {
     expect(existsSync(path.join(root, '.noto'))).toBe(false);
   });
 });
+
+describe('who a server acts for', () => {
+  it('records an owner server\'s reads under the name its client gives, in either era, and a keyed one under its key', async () => {
+    const lines = async () => {
+      const { readdirSync, readFileSync } = await import('node:fs');
+      const dir = path.join(root, '.noto', 'events');
+      return readdirSync(dir).flatMap((host) => readdirSync(path.join(dir, host)).flatMap((file) =>
+        readFileSync(path.join(dir, host, file), 'utf8').split('\n').filter(Boolean).map((line) => JSON.parse(line) as Record<string, unknown>)));
+    };
+    const read = (id: number, meta: object = {}) => ({ jsonrpc: '2.0', id, method: 'tools/call', params: { name: 'read', arguments: { ref: 'notes/argus.md' }, ...meta } });
+    const owner = await Vault.open(root, { owner: true });
+    try {
+      await talk(owner, [
+        { jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'Claude Code', version: '1' } } },
+        read(2),
+      ]);
+    } finally {
+      owner.close();
+    }
+    const again = await Vault.open(root, { owner: true });
+    try {
+      await talk(again, [read(3, META)]);
+    } finally {
+      again.close();
+    }
+    const keyed = await Vault.open(root, { key: 'k' });
+    try {
+      await talk(keyed, [{ jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'pretender', version: '1' } } }, read(2)]);
+    } finally {
+      keyed.close();
+    }
+    expect((await lines()).filter((line) => line.verb === 'read').map((line) => line.actor)).toEqual(['claude-code', 'test', 'agent']);
+  });
+});

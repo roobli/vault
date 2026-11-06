@@ -39,6 +39,7 @@ export function formatAbout(info: AboutNote): string {
   section('Broken links', info.outgoing.brokenCount, info.outgoing.broken.map((link) => `${link.target}  line ${link.line}`));
   lines.push('');
   lines.push(`Links out: ${info.outgoing.count}. Writes: ${info.writes.commits} commits, ${info.writes.appends} appends.`);
+  for (const agent of info.writes.agents) lines.push(`  written by ${agent.actor}: ${agent.count}, last ${agent.last.slice(0, 10)}`);
   if (info.reads.length > 0) lines.push(`Reads by day: ${info.reads.map((entry) => `${entry.day} ${entry.count}`).join(', ')}`);
   if (info.readers.length > 0) lines.push(`Readers: ${info.readers.map((entry) => `${entry.actor} ${entry.count} (last ${entry.last.slice(0, 10)})`).join(', ')}`);
   if (info.leadsHere.length > 0) {

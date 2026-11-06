@@ -70,8 +70,14 @@ export interface AboutNote {
   readonly readers: readonly { actor: string; count: number; last: string }[];
   /** The notes this one was reached from by a link, and the cues that recalled it, most first. Anyone but the owner hears only of its own. */
   readonly leadsHere: readonly { from: string | null; query: string | null; count: number }[];
-  /** Commits that added or changed it, as heat counts writes, and entries appended to it. */
-  readonly writes: { readonly commits: number; readonly appends: number };
+  /**
+   * Commits that added or changed it, as heat counts writes, and entries
+   * appended to it; and the agents that wrote it, by what they recorded (a
+   * write over MCP, or an agent's hook after an edit of its own), most recent
+   * first. Git cannot say which commits those were: they are the person's.
+   * Anyone but the owner hears only of itself.
+   */
+  readonly writes: { readonly commits: number; readonly appends: number; readonly agents: readonly { actor: string; count: number; last: string }[] };
   /** Every principal in access.yaml but the owner, and whether it can see this note. Anyone but the owner hears only of itself. */
   readonly agents: readonly { name: string; canSee: boolean; why: string | null }[];
 }
@@ -235,6 +241,9 @@ export function about(vault: Vault, ref: string, options: AboutOptions = {}): Ab
 
   const commits = (db.prepare(`SELECT count(DISTINCT hash) AS n FROM changes WHERE ${atPaths} AND status IN ('A', 'M')`).get(...paths) as { n: number }).n;
   const appends = (db.prepare(`SELECT count(*) AS n FROM events WHERE ${atPaths} AND verb = 'append'`).get(...paths) as { n: number }).n;
+  const writers = (db.prepare(`SELECT actor, count(*) AS n, max(time) AS last FROM events WHERE ${atPaths} AND verb IN ('write', 'append') AND actor != 'owner'${mine}
+    GROUP BY actor ORDER BY last DESC LIMIT ?`).all(...paths, ...me, limit) as { actor: string; n: number; last: number }[])
+    .map((row) => ({ actor: row.actor, count: row.n, last: new Date(row.last).toISOString() }));
 
   const principals = owner ? vault.access.principals : vault.access.principals.filter((principal) => principal.name === vault.principal.name);
   const agents = principals.map((principal) => {
@@ -265,7 +274,7 @@ export function about(vault: Vault, ref: string, options: AboutOptions = {}): Ab
     reads: latest([...days].map(([day, count]) => ({ day, count })), limit),
     readers,
     leadsHere,
-    writes: { commits, appends },
+    writes: { commits, appends, agents: writers },
     agents,
   };
 }

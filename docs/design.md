@@ -121,21 +121,63 @@ Reads are not in git, so they are recorded. One JSON object per line in
 
 ```json
 {"time":"2026-11-05T01:02:03.456Z","actor":"owner","verb":"open","path":"A/B.md","session":"k3x9","from":"A/index.md"}
+{"time":"2026-11-05T01:04:00.000Z","actor":"claude-code","verb":"recall","paths":["A/B.md","C/D.md"],"session":"ea01","query":"index names"}
+{"time":"2026-11-05T01:05:10.000Z","actor":"owner","verb":"open","path":"A/B.md","session":"k3x9","repeat":4,"until":"2026-11-05T01:07:30.000Z"}
 ```
 
 | field | meaning |
 | --- | --- |
 | `time` | ISO 8601, UTC |
-| `actor` | the principal: `owner` for the person, or an agent's name |
-| `verb` | `open` (shown to a person), `read` (an agent read it), `recall` (put into a context pack), `cite` (an agent used it in an answer), `accept` and `reject` (a proposal) |
+| `actor` | who caused it: `owner` for the person, or an agent's name (below) |
+| `verb` | `open` (shown to a person), `read` (an agent read it), `recall` (put into a context pack), `cite` (an agent used it in an answer), `write` and `append` (an agent wrote it), `propose`, `accept` and `reject` (a proposal) |
 | `path` | vault-relative path |
+| `paths` | instead of `path`: the notes one call did this to, such as the notes one recall returned |
 | `session` | groups one sitting; optional |
 | `from` | the note this one was reached from, by a link; optional |
 | `query` | the cue, for `recall`; optional |
+| `repeat`, `until` | the same event this many times in a row, the first at `time` and the last at `until`; optional, one when absent |
 
 Files are per host, so two machines syncing the vault never conflict on them.
 Unknown fields are kept and ignored. The index reads each file from the byte
-offset it reached last time.
+offset it reached last time, and keeps a fingerprint of the bytes just before
+it: a file that shrank, or whose fingerprint no longer matches (rewritten by
+hand or by git), is read again from the start, with every other file.
+
+Two rules keep the files short. One call is one line: a recall that returns
+eight notes writes `paths` with eight entries, not eight lines. And a writer
+that lives a while (Noto, an MCP server) counts a repeat rather than writing
+it again: the same event (actor, verb, notes, session, link, cue) within a
+minute of the last of its run is added to a `repeat` line, written when the
+run ends, while the first is written at once so the index sees it straight
+away. Lines already written are never changed. On the first real vault this
+cut 908 lines to 244, nearly all of it from recalls.
+
+### Who an event names
+
+An event names who caused it, so that an agent's reading is never counted as
+the person's (an agent's visits weigh `visit.agentWeight` in the trains of
+thought, and Note Info lists every reader by name):
+
+- Noto records the person's opens as `owner`.
+- An MCP server with a key records under the key's principal. A server
+  started with `--owner` serves an agent all the same, and records under the
+  name its client gives (`clientInfo.name`, made safe: `claude-code`).
+- The command line is the person's hands or an agent's. It records under
+  `NOTO_ACTOR` when that is set (`owner` says it is the person), else under
+  the agent that says so in its environment: Claude Code sets `CLAUDECODE=1`
+  (`claude-code`, one session per `CLAUDE_CODE_SESSION_ID`), Codex sets
+  `CODEX_THREAD_ID` (`codex`). Otherwise it is `owner`.
+- `noto-vault eval` measures recall and records nothing.
+
+What an agent writes by editing files itself reaches the index only through
+git, which cannot say who made a change. `noto-vault record <verb> <path...>`
+lets it say so: it appends a line in the vault each note is in, opens no
+index, and passes over anything that is not a note in a folder that keeps
+memory. `noto-vault record --hook` reads a tool hook's JSON on stdin (Claude
+Code's `PostToolUse`: `Read` is a read, `Write`, `Edit`, `MultiEdit` and
+`NotebookEdit` are writes) and never fails the agent's step. Note Info then
+lists the agents that wrote a note beside its commits. The commit itself
+stays the person's: nothing is added to commit messages.
 
 ## Weights: nodes and edges
 

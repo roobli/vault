@@ -7,11 +7,23 @@
  * A line is far below the size the system appends atomically, so processes
  * writing at once do not interleave.
  *
+ * Two things keep the files short. What one call did to several notes at once
+ * (a recall that returns eight) is one line with `paths`. And the same event
+ * again soon after (a note opened again with nothing opened between) is
+ * counted rather than written again: `EventLog` writes the first at once, so
+ * the index sees it straight away, and the rest of the run as one line with
+ * `repeat` once the run ends. Nothing already written is ever changed.
+ *
+ * Every event names who caused it. The person is `owner`; an agent is its
+ * principal when it connects with a key, or, when it runs the command line
+ * on the person's behalf, the name `agentActor` finds for it, so what an
+ * agent did is never counted as the person's reading.
+ *
  * This module has no dependency on the index, so an editor can record a
  * visit without opening SQLite.
  */
 
-import { appendFileSync, mkdirSync } from 'node:fs';
+import { appendFileSync, existsSync, mkdirSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
@@ -20,7 +32,7 @@ export type EventVerb = 'open' | 'read' | 'recall' | 'cite' | 'write' | 'append'
 export interface VaultEvent {
   /** ISO 8601; filled in when absent. */
   readonly time?: string;
-  /** `owner` for the person, or an agent's principal. */
+  /** `owner` for the person, or an agent's name. */
   readonly actor: string;
   readonly verb: EventVerb;
   /** Vault-relative path. */
@@ -30,7 +42,16 @@ export interface VaultEvent {
   readonly from?: string;
   /** The cue, for a recall. */
   readonly query?: string;
+  /** The same event this many times in a row, the first at `time` and the last at `until`; one when absent. */
+  readonly repeat?: number;
+  readonly until?: string;
 }
+
+/** A name for an actor or a principal: what a folder name and a YAML key both take. */
+export const ACTOR_NAME = /^[A-Za-z0-9._-]{1,64}$/;
+
+/** The same event again within this long of the last of its run is counted on the run's line. */
+export const REPEAT_MS = 60_000;
 
 /** A host name that is safe as a folder name. */
 export function hostName(): string {
@@ -46,27 +67,156 @@ function eventFile(root: string, host: string, time: Date): string {
   return path.join(eventsDir(root), host, `${month}.jsonl`);
 }
 
-/** Append events; they all go to the file of the first one's month. */
-export function recordEvents(root: string, events: readonly VaultEvent[], host: string = hostName()): void {
-  if (events.length === 0) return;
-  const now = new Date();
-  const lines = events.map((event) => {
-    const line: Record<string, string> = { time: event.time ?? now.toISOString(), actor: event.actor, verb: event.verb, path: event.path };
-    if (event.session) line.session = event.session;
-    if (event.from) line.from = event.from;
-    if (event.query) line.query = event.query.slice(0, 500);
-    return JSON.stringify(line);
-  });
+/** Everything but the path: events alike in this share a line. */
+const sameCall = (left: VaultEvent, right: VaultEvent): boolean =>
+  left.time === right.time && left.actor === right.actor && left.verb === right.verb && left.session === right.session
+  && left.from === right.from && left.query === right.query && left.repeat === right.repeat && left.until === right.until;
+
+function lineOf(events: readonly VaultEvent[], now: string): string {
+  const first = events[0]!;
+  const line: Record<string, unknown> = { time: first.time ?? now, actor: first.actor, verb: first.verb };
+  if (events.length === 1) line.path = first.path;
+  else line.paths = events.map((event) => event.path);
+  if (first.session) line.session = first.session;
+  if (first.from) line.from = first.from;
+  if (first.query) line.query = first.query.slice(0, 500);
+  if (first.repeat !== undefined && first.repeat > 1) {
+    line.repeat = Math.floor(first.repeat);
+    if (first.until) line.until = first.until;
+  }
+  return JSON.stringify(line);
+}
+
+/**
+ * Append events; they all go to the file of the first one's month. Events
+ * next to each other that differ only in their path are one line. A folder
+ * that does not keep memory (it has no `.noto/`) is left as it is: false.
+ */
+export function recordEvents(root: string, events: readonly VaultEvent[], host: string = hostName()): boolean {
+  if (events.length === 0) return true;
+  if (!existsSync(path.join(root, '.noto'))) return false;
+  const now = new Date().toISOString();
+  const lines: string[] = [];
+  let run: VaultEvent[] = [];
+  for (const event of events) {
+    if (run.length > 0 && !sameCall(run[0]!, event)) {
+      lines.push(lineOf(run, now));
+      run = [];
+    }
+    run.push(event);
+  }
+  lines.push(lineOf(run, now));
   const file = eventFile(root, host, new Date(events[0]!.time ?? now));
   mkdirSync(path.dirname(file), { recursive: true });
   appendFileSync(file, `${lines.join('\n')}\n`, 'utf8');
+  return true;
 }
 
-export function recordEvent(root: string, event: VaultEvent, host?: string): void {
-  recordEvents(root, [event], host);
+export function recordEvent(root: string, event: VaultEvent, host?: string): boolean {
+  return recordEvents(root, [event], host);
 }
 
 /** A short random id for a sitting. */
 export function newSession(): string {
   return `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
+}
+
+/**
+ * Who is running this process on the person's behalf, when it is not the
+ * person: `NOTO_ACTOR` when set (`owner` says it is the person), else an
+ * agent that says so in the environment it gives its commands. Claude Code
+ * sets `CLAUDECODE`, and Codex `CODEX_THREAD_ID`; each sitting of either is
+ * one session. Null for the person at a terminal.
+ */
+export function agentActor(env: NodeJS.ProcessEnv = process.env): { actor: string; session?: string } | null {
+  const named = env.NOTO_ACTOR?.trim();
+  if (named) {
+    if (named === 'owner' || !ACTOR_NAME.test(named)) return null;
+    return { actor: named };
+  }
+  const sitting = (value: string | undefined) => (value && /^[A-Za-z0-9._:-]{1,80}$/.test(value) ? { session: value } : {});
+  if (env.CLAUDECODE === '1') return { actor: 'claude-code', ...sitting(env.CLAUDE_CODE_SESSION_ID) };
+  if (env.CODEX_THREAD_ID) return { actor: 'codex', ...sitting(env.CODEX_THREAD_ID) };
+  return null;
+}
+
+interface Run {
+  readonly key: string;
+  readonly event: VaultEvent;
+  readonly paths: readonly string[];
+  /** Seen again after the first, which was written when it came. */
+  more: number;
+  firstMore: number;
+  last: number;
+}
+
+const live = new Set<EventLog>();
+let exitHooked = false;
+
+/**
+ * A writer for a process that lives a while (an editor, a server): each event
+ * is written when it comes, except one that repeats the last exactly (same
+ * actor, verb, paths, session, link and cue) within `REPEAT_MS` of it, which
+ * is counted. The count is written when a different event comes, when a
+ * minute passes without another, on `flush`, and when the process exits.
+ */
+export class EventLog {
+  private run: Run | null = null;
+  private timer: NodeJS.Timeout | null = null;
+
+  constructor(
+    private readonly root: string,
+    private readonly host: string = hostName(),
+    private readonly clock: () => number = Date.now,
+    private readonly repeatMs: number = REPEAT_MS,
+  ) {}
+
+  /** Record what one call did to `events` (alike but for their paths); false when the folder does not keep memory. */
+  record(events: readonly VaultEvent[]): boolean {
+    if (events.length === 0) return true;
+    const now = this.clock();
+    const first = events[0]!;
+    const key = JSON.stringify([first.actor, first.verb, first.session ?? '', first.from ?? '', first.query ?? '', events.map((event) => event.path)]);
+    if (this.run && this.run.key === key && now - this.run.last <= this.repeatMs) {
+      if (this.run.more === 0) this.run.firstMore = now;
+      this.run.more += 1;
+      this.run.last = now;
+      this.arm();
+      return true;
+    }
+    this.flush();
+    const time = new Date(now).toISOString();
+    const written = recordEvents(this.root, events.map((event) => ({ ...event, time: event.time ?? time })), this.host);
+    if (!written) return false;
+    this.run = { key, event: { ...first, time }, paths: events.map((event) => event.path), more: 0, firstMore: now, last: now };
+    this.arm();
+    return true;
+  }
+
+  /** Write the count of the run so far, if it repeated, and start afresh. */
+  flush(): void {
+    if (this.timer) { clearTimeout(this.timer); this.timer = null; }
+    const run = this.run;
+    this.run = null;
+    live.delete(this);
+    if (!run || run.more === 0) return;
+    const { event } = run;
+    const repeated = { ...event, time: new Date(run.firstMore).toISOString(), repeat: run.more, until: new Date(run.last).toISOString() };
+    try {
+      recordEvents(this.root, run.paths.map((rel) => ({ ...repeated, path: rel })), this.host);
+    } catch {
+      // A disk that went read-only forgets the count, as it would the event.
+    }
+  }
+
+  private arm(): void {
+    if (this.timer) clearTimeout(this.timer);
+    this.timer = setTimeout(() => this.flush(), this.repeatMs);
+    this.timer.unref?.();
+    live.add(this);
+    if (!exitHooked) {
+      exitHooked = true;
+      process.once('exit', () => { for (const log of [...live]) log.flush(); });
+    }
+  }
 }

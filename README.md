@@ -30,6 +30,7 @@ noto-vault suggest --dismiss <id...>      # never suggest these again
 noto-vault proposals show <id>
 noto-vault proposals accept <id>
 noto-vault graph --out graph.json         # nodes with heat, edges with weights
+noto-vault record write notes/plan.md     # say a note was written outside Noto (an agent's hook does this)
 ```
 
 `noto-vault help` lists every command.
@@ -57,6 +58,21 @@ frontmatter makes it stricter than its folder; neither opens the index.
 A server stops serving a folder whose `.noto` was taken away (an editor
 turning memory off moves it to the Trash): it answers that the folder no
 longer keeps memory rather than opening the vault anew under no policy.
+
+What an agent does is recorded under its name, never as yours: a server
+under its key (or, started with `--owner`, under the name its client gives),
+and the command line under `NOTO_ACTOR` or the agent that runs it (Claude
+Code and Codex say so in their environment). An agent that edits notes
+itself can say so too, with a hook after each edit; Note Info then lists it
+beside the note's commits:
+
+```json
+{ "hooks": { "PostToolUse": [ { "matcher": "Read|Write|Edit|MultiEdit",
+  "hooks": [ { "type": "command", "command": "node /path/to/vault/bin/noto-vault.mjs record --hook" } ] } ] } }
+```
+
+That goes in Claude Code's `settings.json`. It records only notes in a folder
+that keeps memory, opens no index, and never fails the agent's step.
 
 The MCP server speaks both the `initialize` handshake (2025-11-25 and earlier)
 and per-request metadata (2026-07-28). Its tools are the eight verbs: `recall`,

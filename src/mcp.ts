@@ -21,6 +21,7 @@ const MODERN = ['2026-07-28'];
 const LEGACY = ['2025-11-25', '2025-06-18', '2025-03-26', '2024-11-05'];
 const SUPPORTED = [...MODERN, ...LEGACY];
 const VERSION_KEY = 'io.modelcontextprotocol/protocolVersion';
+const CLIENT_KEY = 'io.modelcontextprotocol/clientInfo';
 const SERVER_INFO = { name: 'noto-vault', version: '0.1.0' };
 
 const INSTRUCTIONS = [
@@ -208,6 +209,14 @@ export function serve(initial: Vault, options: ServeOptions = {}): Promise<void>
    * among them. Putting `.noto` back serves again.
    */
   let gone = false;
+  /** The name the client gave when it connected, for a server that acts as the owner. */
+  let clientName: string | null = null;
+  // A server that acts as the owner still serves an agent: what it reads is that agent's, by the name it gives.
+  const learnClient = (info: unknown) => {
+    if (clientName || !info || typeof info !== 'object' || typeof (info as Json).name !== 'string') return;
+    clientName = ((info as Json).name as string).toLowerCase().replace(/[^a-z0-9._-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 64) || null;
+    if (clientName) vault.actAs(clientName);
+  };
   const input = options.input ?? process.stdin;
   const output = options.output ?? process.stdout;
   const refreshAfter = options.refreshAfterMs ?? 2000;
@@ -229,9 +238,12 @@ export function serve(initial: Vault, options: ServeOptions = {}): Promise<void>
       fail(id, -32022, 'Unsupported protocol version', { supported: SUPPORTED, requested });
       return;
     }
+    // A client of this era says who it is on every request, rather than once.
+    learnClient(meta[CLIENT_KEY]);
     switch (method) {
       case 'initialize': {
         const asked = typeof params.protocolVersion === 'string' ? params.protocolVersion : LEGACY[0]!;
+        learnClient(params.clientInfo);
         reply(id, { protocolVersion: LEGACY.includes(asked) ? asked : LEGACY[0], capabilities: { tools: {} }, serverInfo: SERVER_INFO, instructions: INSTRUCTIONS });
         return;
       }
@@ -273,6 +285,7 @@ export function serve(initial: Vault, options: ServeOptions = {}): Promise<void>
     if (gone || !options.reopen || !vault.stale()) return;
     try {
       const next = await options.reopen();
+      if (clientName) next.actAs(clientName);
       vault.close();
       vault = next;
       broken = null;

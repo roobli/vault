@@ -91,6 +91,9 @@ beforeEach(() => {
     { time: at(4, 10, 7), actor: 'owner', verb: 'cite', path: ARGUS },
     { time: at(4, 10, 8), actor: 'owner', verb: 'write', path: ARGUS },
     { time: at(4, 10, 9), actor: 'owner', verb: 'append', path: ARGUS },
+    // An agent that edits the file itself says so from its hook; the person's writes are git's to count.
+    { time: at(4, 10, 10), actor: 'claude-code', verb: 'write', path: ARGUS, session: 'cc' },
+    { time: at(4, 10, 11), actor: 'claude-code', verb: 'write', path: ARGUS, session: 'cc', repeat: 2, until: at(4, 10, 12) },
     // Reached from a note by its old path, and from a path that is gone though it reads like a title.
     { time: at(4, 11, 0), actor: 'owner', verb: 'open', path: 'Knowledge/audit.md', session: 's9', from: 'Knowledge/idea-old.md' },
     { time: at(4, 12, 0), actor: 'owner', verb: 'open', path: 'Knowledge/audit.md', session: 's10', from: 'Plain' },
@@ -180,7 +183,7 @@ describe('about', () => {
       expect(info.leadsHere[0]).toEqual({ from: IDEA, query: null, count: 2 });
       expect(info.leadsHere).toContainEqual({ from: SEALED, query: null, count: 1 });
       expect(info.leadsHere).toContainEqual({ from: null, query: '审计', count: 1 });
-      expect(info.writes).toEqual({ commits: 2, appends: 1 });
+      expect(info.writes).toEqual({ commits: 2, appends: 1, agents: [{ actor: 'claude-code', count: 3, last: at(4, 10, 12) }] });
       expect(about(vault, ARGUS, { limit: 1 }).reads).toEqual([{ day: '2026-11-04', count: 5 }]);
       // A limit from a command line may be anything: a fraction counts down, below zero is none.
       expect(about(vault, ARGUS, { limit: 1.5 }).readers).toHaveLength(1);
@@ -192,7 +195,7 @@ describe('about', () => {
       // What happened at the note's old path is the note's; the commit that only moved it is not a write.
       const idea = about(vault, IDEA);
       expect(idea.reads).toEqual([{ day: '2026-11-02', count: 1 }, { day: '2026-11-03', count: 1 }]);
-      expect(idea.writes).toEqual({ commits: 1, appends: 0 });
+      expect(idea.writes).toEqual({ commits: 1, appends: 0, agents: [] });
     } finally {
       vault.close();
     }

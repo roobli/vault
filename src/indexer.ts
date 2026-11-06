@@ -529,6 +529,49 @@ function resolveLinks(ix: IndexContext, files: ReadonlySet<string>, only: Readon
   });
 }
 
+/** Where the meta table keeps what each event file's last line read looked like. */
+const EVENT_TAIL = 'events_tail:';
+/** The most rows one line stands for, its notes times its run. A line claiming more is cut to this. */
+const EVENT_LINE_MAX = 1000;
+
+/** A fingerprint of the bytes just before `offset`: the end of the last line read. */
+function tailOf(file: string, offset: number): string {
+  const length = Math.min(offset, 256);
+  const buffer = Buffer.alloc(length);
+  const fd = openSync(file, 'r');
+  try { readSync(fd, buffer, 0, length, offset - length); } finally { closeSync(fd); }
+  return createHash('sha1').update(buffer).digest('hex');
+}
+
+/**
+ * The rows one line stands for: one per note when it names several
+ * (`paths`), and one per time when it is a run (`repeat`), spread evenly from
+ * `time` to `until`. A line without a time, a verb or a note is skipped.
+ */
+export function eventRows(event: Record<string, unknown>): { time: number; actor: string; verb: string; path: string; session: string | null; from: string | null; query: string | null }[] {
+  const time = Date.parse(String(event.time));
+  if (!Number.isFinite(time) || typeof event.verb !== 'string') return [];
+  const paths = typeof event.path === 'string' ? [event.path]
+    : Array.isArray(event.paths) ? event.paths.filter((item): item is string => typeof item === 'string').slice(0, EVENT_LINE_MAX) : [];
+  if (paths.length === 0) return [];
+  const asked = typeof event.repeat === 'number' && Number.isFinite(event.repeat) ? Math.max(1, Math.floor(event.repeat)) : 1;
+  const repeat = Math.max(1, Math.min(asked, Math.floor(EVENT_LINE_MAX / paths.length)));
+  const until = Date.parse(String(event.until));
+  const span = repeat > 1 && Number.isFinite(until) && until > time ? until - time : 0;
+  const base = {
+    actor: String(event.actor ?? 'owner'), verb: event.verb,
+    session: typeof event.session === 'string' ? event.session : null,
+    from: typeof event.from === 'string' ? event.from : null,
+    query: typeof event.query === 'string' ? event.query : null,
+  };
+  const rows = [];
+  for (let at = 0; at < repeat; at += 1) {
+    const when = repeat > 1 ? time + Math.round((span * at) / (repeat - 1)) : time;
+    for (const rel of paths) rows.push({ ...base, time: when, path: rel });
+  }
+  return rows;
+}
+
 function ingestEvents(ix: IndexContext): number {
   const { store, root } = ix;
   const dir = eventsDir(root);
@@ -549,9 +592,16 @@ function ingestEvents(ix: IndexContext): number {
     // Offsets are read inside the write lock, so two processes never read the same lines.
     const offsets = new Map<string, number>();
     for (const row of store.db.prepare('SELECT file, offset FROM event_files').all() as { file: string; offset: number }[]) offsets.set(row.file, row.offset);
-    // A file that shrank was rewritten: start the events over.
-    if (files.some((file) => (offsets.get(file.rel) ?? 0) > file.size)) {
-      store.db.exec('DELETE FROM events; DELETE FROM event_files;');
+    // A file that shrank, or whose last line read is no longer what it was, was rewritten
+    // (by hand, or by git): start the events over, since nothing says which lines are new.
+    const rewritten = files.some((file) => {
+      const offset = offsets.get(file.rel) ?? 0;
+      if (offset > file.size) return true;
+      const tail = store.meta(`${EVENT_TAIL}${file.rel}`);
+      return offset > 0 && tail !== null && tail !== tailOf(path.join(dir, file.rel), offset);
+    });
+    if (rewritten) {
+      store.db.exec(`DELETE FROM events; DELETE FROM event_files; DELETE FROM meta WHERE key LIKE '${EVENT_TAIL}%';`);
       offsets.clear();
     }
     for (const file of files) {
@@ -566,15 +616,13 @@ function ingestEvents(ix: IndexContext): number {
         if (!line.trim()) continue;
         let event: Record<string, unknown>;
         try { event = JSON.parse(line) as Record<string, unknown>; } catch { continue; }
-        const time = Date.parse(String(event.time));
-        if (!Number.isFinite(time) || typeof event.path !== 'string' || typeof event.verb !== 'string') continue;
-        insert.run(time, String(event.actor ?? 'owner'), event.verb, event.path,
-          typeof event.session === 'string' ? event.session : null,
-          typeof event.from === 'string' ? event.from : null,
-          typeof event.query === 'string' ? event.query : null);
-        count += 1;
+        for (const row of eventRows(event)) {
+          insert.run(row.time, row.actor, row.verb, row.path, row.session, row.from, row.query);
+          count += 1;
+        }
       }
       setOffset.run(file.rel, offset + end + 1);
+      store.setMeta(`${EVENT_TAIL}${file.rel}`, tailOf(path.join(dir, file.rel), offset + end + 1));
     }
   });
   return count;

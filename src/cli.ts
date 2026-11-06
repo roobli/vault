@@ -1,7 +1,9 @@
 /**
  * `noto-vault`: the verbs from a shell, for the person, for scripts, and for
  * agents that have a shell. The CLI acts as the owner unless
- * `NOTO_VAULT_KEY` names another principal.
+ * `NOTO_VAULT_KEY` names another principal; when an agent runs it for the
+ * person, what it does is recorded under the agent's name (`agentActor`), so
+ * an agent's recalls and proposals are never counted as the person's.
  */
 
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
@@ -9,6 +11,8 @@ import path from 'node:path';
 import { createInterface } from 'node:readline/promises';
 import { parseArgs } from 'node:util';
 import { about } from './about.js';
+import { agentActor, recordEvents, type EventVerb } from './events.js';
+import { isMarkdown } from './paths.js';
 import { initVault } from './init.js';
 import { formatAbout, formatRead, formatRecall, formatSearch, formatSuggestion, formatSuggestions, plainEmphasis, terminalEmphasis } from './format.js';
 import { serve } from './mcp.js';
@@ -42,11 +46,16 @@ const HELP = `noto-vault: a vault of Markdown notes as memory
   noto-vault supersede <old> <new>      mark old as superseded by new
   noto-vault key add <principal>        make a key for an agent and add it to .noto/access.yaml
   noto-vault key revoke <principal>     take an agent's keys back
-  noto-vault eval <cases.yaml>          how well recall finds what it should  [--k 5] [--search]
+  noto-vault eval <cases.yaml>          how well recall finds what it should  [--k 5] [--search]   (records nothing)
+  noto-vault record <verb> <path...>    say a note was read or written outside Noto: open, read, cite, write, append
+  noto-vault record --hook              the same, from an agent's tool hook on stdin (Claude Code's PostToolUse)
   noto-vault mcp [--owner]              serve the vault over MCP on stdio
 
   --root <dir>   the vault (default: the nearest folder above with .noto/)
-  --json         machine-readable output`;
+  --json         machine-readable output
+
+  Who is recorded: the person, unless NOTO_VAULT_KEY names an agent, NOTO_ACTOR
+  names one, or an agent says so in its environment (Claude Code, Codex).`;
 
 function findRoot(start: string): string | null {
   let at = path.resolve(start);
@@ -69,6 +78,7 @@ async function main(argv: string[]): Promise<number> {
       folder: { type: 'string' }, from: { type: 'string' }, budget: { type: 'string' }, out: { type: 'string' }, types: { type: 'string' },
       min: { type: 'string' }, propose: { type: 'boolean' }, review: { type: 'boolean' }, dismiss: { type: 'boolean' }, message: { type: 'string' }, to: { type: 'string' }, base: { type: 'string' },
       rel: { type: 'string' }, owner: { type: 'boolean' }, k: { type: 'string' }, search: { type: 'boolean' }, meta: { type: 'boolean' },
+      hook: { type: 'boolean' },
       help: { type: 'boolean', short: 'h' },
     },
   });
@@ -88,6 +98,9 @@ async function main(argv: string[]): Promise<number> {
     console.log(made.length > 0 ? `Made ${made.join(', ')}. Run noto-vault index next.` : '.noto/ is already set up.');
     return 0;
   }
+
+  // Before any vault is opened: it runs after every edit an agent makes, and needs no index.
+  if (command === 'record') return record(rest, values.hook === true, typeof values.root === 'string' ? path.resolve(values.root) : null);
 
   const root = typeof values.root === 'string' ? path.resolve(values.root) : process.env.NOTO_VAULT_ROOT ? path.resolve(process.env.NOTO_VAULT_ROOT) : findRoot(process.cwd());
   if (!root) {
@@ -126,7 +139,11 @@ async function main(argv: string[]): Promise<number> {
 
   const key = process.env.NOTO_VAULT_KEY;
   const owner = command === 'mcp' ? values.owner === true : key === undefined || key === '';
-  const vault = await Vault.open(root, { owner, ...(owner || !key ? {} : { key }), ...(process.env.NOTO_SESSION ? { session: process.env.NOTO_SESSION } : {}), refresh: command !== 'visit' });
+  // A server is the agent's own, under its key or as the owner it was started as; the command line may be an agent's hands.
+  const acting = owner && command !== 'mcp' ? agentActor() : null;
+  const session = process.env.NOTO_SESSION || acting?.session;
+  const opening = { owner, ...(owner || !key ? {} : { key }), ...(session ? { session } : {}), ...(acting ? { actor: acting.actor } : {}) };
+  const vault = await Vault.open(root, { ...opening, refresh: command !== 'visit' });
   try {
     switch (command) {
       case 'index': {
@@ -295,7 +312,7 @@ async function main(argv: string[]): Promise<number> {
       }
       case 'mcp':
         await serve(vault, {
-          reopen: () => Vault.open(root, { owner, ...(owner || !key ? {} : { key }), ...(process.env.NOTO_SESSION ? { session: process.env.NOTO_SESSION } : {}) }),
+          reopen: () => Vault.open(root, opening),
         });
         return 0;
       default:
@@ -373,7 +390,8 @@ function evaluate(vault: Vault, file: string, k: number, bySearch: boolean) {
   for (const raw of cases as unknown as EvalCase[]) {
     if (!raw || typeof raw.query !== 'string' || !Array.isArray(raw.expect)) continue;
     const expected = raw.expect.map((ref) => vault.find(String(ref))?.path ?? String(ref));
-    const ranked = bySearch ? vault.search(raw.query, { limit: k }).map((hit) => hit.path) : recall(vault, raw.query, { limit: k, budget: 1_000_000 }).items.map((item) => item.path);
+    // A measurement, not a use: nothing it finds is recorded as recalled.
+    const ranked = bySearch ? vault.search(raw.query, { limit: k }).map((hit) => hit.path) : recall(vault, raw.query, { limit: k, budget: 1_000_000, record: false }).items.map((item) => item.path);
     const top = ranked.slice(0, k);
     const found = expected.filter((rel) => top.includes(rel));
     const first = top.findIndex((rel) => expected.includes(rel));
@@ -388,6 +406,78 @@ function evaluate(vault: Vault, file: string, k: number, bySearch: boolean) {
     ...rows.filter((row) => !row.hit).map((row) => `  miss: ${row.query}\n    got: ${row.top.slice(0, 3).join(' | ')}`),
   ].join('\n');
   return { cases: rows.length, k, hitRate, recall: meanRecall, mrr, rows, text };
+}
+
+/** What a person or an agent may say happened to a note outside Noto; the rest are the vault's own to record. */
+const RECORDABLE: readonly EventVerb[] = ['open', 'read', 'cite', 'write', 'append'];
+
+/** What an agent's tool did, by its name: Claude Code's, and any tool named the same way. */
+function hookVerb(tool: unknown): EventVerb | null {
+  if (typeof tool !== 'string') return null;
+  if (/^(Read|NotebookRead)$/.test(tool)) return 'read';
+  if (/^(Write|Edit|MultiEdit|NotebookEdit)$/.test(tool)) return 'write';
+  return null;
+}
+
+async function readStdin(): Promise<string> {
+  const chunks: Buffer[] = [];
+  for await (const chunk of process.stdin) chunks.push(chunk as Buffer);
+  return Buffer.concat(chunks).toString('utf8');
+}
+
+/**
+ * Record that notes were read or written outside Noto: by the person in
+ * another editor, or by an agent that edits files itself (a hook after each
+ * of its edits). Each path goes to the vault it is in, the nearest folder
+ * above it with `.noto/`; a path in no such folder, or not a note, is passed
+ * over. Opens no index, so a hook that runs after every edit costs a process
+ * start and one appended line. From a hook it never fails the agent's step.
+ */
+async function record(args: readonly string[], hook: boolean, root: string | null): Promise<number> {
+  let verb: EventVerb | null;
+  let files: string[];
+  let session: string | undefined;
+  if (hook) {
+    let payload: Record<string, unknown>;
+    try { payload = JSON.parse(await readStdin()) as Record<string, unknown>; } catch { return 0; }
+    verb = hookVerb(payload.tool_name);
+    const input = (payload.tool_input ?? {}) as Record<string, unknown>;
+    const file = [input.file_path, input.notebook_path, input.path].find((value): value is string => typeof value === 'string');
+    files = file ? [file] : [];
+    const cwd = typeof payload.cwd === 'string' ? payload.cwd : process.cwd();
+    files = files.map((item) => path.resolve(cwd, item));
+    if (typeof payload.session_id === 'string' && /^[A-Za-z0-9._:-]{1,80}$/.test(payload.session_id)) session = payload.session_id;
+  } else {
+    verb = RECORDABLE.includes(args[0] as EventVerb) ? args[0] as EventVerb : null;
+    if (!verb || args.length < 2) throw new UsageError(`Usage: noto-vault record <${RECORDABLE.join('|')}> <path...>`);
+    files = args.slice(1).map((item) => path.resolve(item));
+  }
+  if (!verb || files.length === 0) return 0;
+  const acting = agentActor();
+  const actor = acting?.actor ?? 'owner';
+  session = process.env.NOTO_SESSION || session || acting?.session;
+  let recorded = 0;
+  try {
+    const byVault = new Map<string, string[]>();
+    for (const file of files) {
+      const vault = root ?? findRoot(path.dirname(file));
+      if (!vault) continue;
+      const rel = path.relative(vault, file);
+      if (!rel || rel.startsWith('..') || path.isAbsolute(rel) || !isMarkdown(rel)) continue;
+      const parts = rel.split(path.sep);
+      // The vault's own files and hidden folders are not notes.
+      if (parts.some((part) => part.startsWith('.'))) continue;
+      byVault.set(vault, [...(byVault.get(vault) ?? []), parts.join('/')]);
+    }
+    for (const [vault, rels] of byVault) {
+      if (recordEvents(vault, rels.map((rel) => ({ actor, verb: verb!, path: rel, ...(session ? { session } : {}) })))) recorded += rels.length;
+    }
+  } catch (error) {
+    if (hook) return 0;
+    throw error;
+  }
+  if (!hook && recorded === 0) console.error('None of these is a note in a folder that keeps memory, so nothing was recorded.');
+  return hook || recorded > 0 ? 0 : 1;
 }
 
 export async function run(argv: string[]): Promise<void> {
