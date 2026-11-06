@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'nod
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { dismiss, dismissals, suggest, suggestionId, undismiss } from '../src/suggest.js';
+import { dismiss, dismissals, prepare, suggest, suggestionId, undismiss } from '../src/suggest.js';
 import { AccessError, Vault } from '../src/vault.js';
 
 let root: string;
@@ -118,6 +118,26 @@ describe('suggest', () => {
     } finally {
       owner.close();
       stranger.close();
+    }
+  });
+
+  it('leaves out a suggestion whose note changed since, rather than linking in the wrong place', async () => {
+    const owner = await Vault.open(root, { owner: true });
+    try {
+      const target = 'Areas/Search/Design/目标设计说明.md';
+      const near = mention(suggest(owner), 'Areas/Search/Design/notes.md', target)!;
+      const far = mention(suggest(owner), 'Elsewhere/essay.md', target)!;
+      // One note is written to after the suggestions were made: its words have moved.
+      write('Areas/Search/Design/notes.md', '# Notes\n\n新加了一段话。先读目标设计说明，再动手。\n');
+      const { changes, outdated } = prepare(owner, [near, far]);
+      expect(outdated.map((item) => item.id)).toEqual([near.id]);
+      expect(changes.map((change) => change.path)).toEqual(['Elsewhere/essay.md']);
+      expect(changes[0]!.content).toContain('[[');
+      // A note that is gone cannot take its link either.
+      rmSync(path.join(root, 'Elsewhere/essay.md'));
+      expect(prepare(owner, [far]).outdated.map((item) => item.id)).toEqual([far.id]);
+    } finally {
+      owner.close();
     }
   });
 

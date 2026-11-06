@@ -367,10 +367,15 @@ export function suggest(vault: Vault, options: SuggestOptions = {}): Suggestion[
     const index = buildResolveIndex(files);
     const rows = db.prepare(`SELECT l.src, l.kind, l.target, l.anchor, l.label, l.line, l.start, l.end, l.resolved FROM links l
       WHERE l.via = 'alias' AND l.start >= 0`).all() as { src: string; kind: 'wiki' | 'md'; target: string; anchor: string; label: string | null; line: number; start: number; end: number; resolved: string }[];
+    const texts = new Map<string, string | null>();
     for (const row of rows) {
       const from = byPath.get(row.src);
       const to = byPath.get(row.resolved);
       if (!from || !to || (fromSet && !fromSet.has(from.path))) continue;
+      // The link as the note has it now; an index behind the file has the place wrong, and nothing is offered there.
+      if (!texts.has(row.src)) texts.set(row.src, vault.textOf(row.src));
+      const original = texts.get(row.src)?.slice(row.start, row.end) ?? null;
+      if (original === null || !/^!?\[/.test(original)) continue;
       const origin = db.prepare("SELECT origin FROM aliases WHERE path = ? AND origin IN ('old_path', 'old_name') LIMIT 1").get(to.path) as { origin: string } | undefined;
       if (!origin) continue;
       let replacement: string;
@@ -392,7 +397,7 @@ export function suggest(vault: Vault, options: SuggestOptions = {}): Suggestion[
       out.push({
         id: suggestionId('stale', from.path, to.path), type: 'stale', from: from.path, to: to.path, toTitle: to.title, line: row.line,
         score: 2, reason: `the link names "${row.target}", which is where the note used to be`,
-        splice: { start: row.start, end: row.end, replacement },
+        splice: { start: row.start, end: row.end, replacement, original },
       });
     }
   }
@@ -541,7 +546,7 @@ function mentions(vault: Vault, table: NameTable, sources: readonly NoteLite[], 
       score: Math.round(target.weight * (card ? 1.3 : 1) * (to.source === 'heard' ? 0.6 : 1) * (1 + 0.1 * Math.log1p(heat(to.path)))
         * nearness(from, to, card) * (embedded ? 0.6 : 1) / Math.max(1, Math.log2(1 + frequency)) * 100) / 100,
       reason: `mentions "${written}" without linking to it`,
-      splice: { start, end, replacement },
+      splice: { start, end, replacement, original: text.slice(start, end) },
     });
   }
   return out;
@@ -552,12 +557,29 @@ function mentions(vault: Vault, table: NameTable, sources: readonly NoteLite[], 
  * stale links, relation lines for the rest, one change per note.
  */
 export function toChanges(vault: Vault, suggestions: readonly Suggestion[]): FileChange[] {
+  return prepare(vault, suggestions).changes;
+}
+
+/**
+ * The same, and the suggestions that can no longer be applied: a note that
+ * changed since the suggestion was made no longer has the words where the
+ * splice says (or is gone), and a link written there would land in the wrong
+ * place. Those are left out and named, to be suggested afresh.
+ */
+export function prepare(vault: Vault, suggestions: readonly Suggestion[]): { changes: FileChange[]; outdated: Suggestion[] } {
   const byNote = new Map<string, Suggestion[]>();
   for (const suggestion of suggestions) (byNote.get(suggestion.from) ?? byNote.set(suggestion.from, []).get(suggestion.from)!).push(suggestion);
   const changes: FileChange[] = [];
-  for (const [rel, items] of byNote) {
+  const outdated: Suggestion[] = [];
+  for (const [rel, all] of byNote) {
     const original = vault.textOf(rel);
-    if (original === null) continue;
+    if (original === null) { outdated.push(...all); continue; }
+    const items = all.filter((item) => {
+      const splice = item.splice;
+      if (!splice || splice.original === undefined || original.slice(splice.start, splice.end) === splice.original) return true;
+      outdated.push(item);
+      return false;
+    });
     let text = applySplices(original, items.filter((item) => item.splice).map((item) => item.splice!)).text;
     const lines: string[] = [];
     for (const item of items.filter((entry) => !entry.splice)) {
@@ -567,6 +589,6 @@ export function toChanges(vault: Vault, suggestions: readonly Suggestion[]): Fil
     if (lines.length > 0) text = addRelationLines(text, lines, vault.config.relationsHeading);
     if (text !== original) changes.push({ path: rel, content: text });
   }
-  return changes;
+  return { changes, outdated };
 }
 

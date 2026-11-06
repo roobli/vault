@@ -5,7 +5,7 @@ export { initVault } from './init.js';
 export type { AboutNote, AboutOptions, Origin, Traced } from './about.js';
 export { recall, excerptOf } from './recall.js';
 export type { RecallItem, RecallPack, RecallOptions } from './recall.js';
-export { dismiss, dismissals, suggest, toChanges, undismiss } from './suggest.js';
+export { dismiss, dismissals, prepare, suggest, toChanges, undismiss } from './suggest.js';
 export type { Dismissal, Suggestion, SuggestionType, SuggestOptions } from './suggest.js';
 export { parseNote, extractLinks, splitFrontmatter, maskCode, maskFences, DEFAULT_RELATIONS } from './markdown.js';
 export type { Link, LinkKind, Heading, ParsedNote } from './markdown.js';

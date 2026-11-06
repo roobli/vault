@@ -264,6 +264,13 @@ named by an id or alias written in its frontmatter, are never further than
 running text is read: not frontmatter, headings, code, links (labels
 included), URLs or paths.
 
+A suggestion's change is a splice that also records the words it replaces;
+`prepare(vault, suggestions)` turns the chosen ones into file changes and
+leaves out, by name, any whose note no longer has those words there (it was
+written to since, or is gone), so a list kept open for a while never puts a
+link in the wrong place. A stale link is only offered where the note still
+has a link at the place the index says.
+
 Nothing is applied until the person says so: `suggest --review` asks about
 each, strongest first, then makes the yes into one proposal and applies it
 if asked; `--propose <id...>` makes a proposal; `--dismiss <id...>` says no.
