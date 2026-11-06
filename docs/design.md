@@ -322,8 +322,9 @@ broken links; reads per local day, readers and what led to it; commits and
 appends; and which agents can see it, and why not. It needs the `read` verb,
 leaves out of every list what the caller cannot see, and records nothing.
 Anyone but the owner gets the same refusal for a hidden note as for a missing
-one, and hears only of its own reads and leads, and of itself among the
-agents. It runs on every note switch, so it reads the index by the note's
+one, and sees only its own entries among the readers and leads, and itself
+among the agents; the reads per day and the together weights count everyone,
+as heat, recall and suggest already do. It runs on every note switch, so it reads the index by the note's
 own keys; the name matcher behind the mentions is kept by an open vault
 until the index counts a change of names (`names` in its meta table).
 

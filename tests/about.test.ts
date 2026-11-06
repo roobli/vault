@@ -91,6 +91,9 @@ beforeEach(() => {
     { time: at(4, 10, 7), actor: 'owner', verb: 'cite', path: ARGUS },
     { time: at(4, 10, 8), actor: 'owner', verb: 'write', path: ARGUS },
     { time: at(4, 10, 9), actor: 'owner', verb: 'append', path: ARGUS },
+    // Reached from a note by its old path, and from a path that is gone though it reads like a title.
+    { time: at(4, 11, 0), actor: 'owner', verb: 'open', path: 'Knowledge/audit.md', session: 's9', from: 'Knowledge/idea-old.md' },
+    { time: at(4, 12, 0), actor: 'owner', verb: 'open', path: 'Knowledge/audit.md', session: 's10', from: 'Plain' },
   ];
   write(EVENTS, `${events.map((event) => JSON.stringify(event)).join('\n')}\n`);
 });
@@ -179,6 +182,8 @@ describe('about', () => {
       expect(info.leadsHere).toContainEqual({ from: null, query: '审计', count: 1 });
       expect(info.writes).toEqual({ commits: 2, appends: 1 });
       expect(about(vault, ARGUS, { limit: 1 }).reads).toEqual([{ day: '2026-11-04', count: 5 }]);
+      // A note an event came from is where its old path leads now; a path that leads nowhere stays as written.
+      expect(about(vault, 'Knowledge/audit.md').leadsHere).toEqual([{ from: 'Plain', query: null, count: 1 }, { from: IDEA, query: null, count: 1 }]);
       // What happened at the note's old path is the note's; the commit that only moved it is not a write.
       const idea = about(vault, IDEA);
       expect(idea.reads).toEqual([{ day: '2026-11-02', count: 1 }, { day: '2026-11-03', count: 1 }]);

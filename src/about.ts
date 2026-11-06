@@ -135,7 +135,8 @@ export function about(vault: Vault, ref: string, options: AboutOptions = {}): Ab
   const owner = vault.principal.owner;
   const weightsAt = Number(vault.store.meta('weights_at') ?? now);
   const visible = (path: string, sensitivity: Sensitivity) => vault.canSee({ path, sensitivity });
-  const origins = JSON.parse((db.prepare('SELECT origins FROM notes WHERE path = ?').get(rel) as { origins: string }).origins) as Partial<Origins>;
+  // Another process may have removed the note since find saw it; its values then stand without origins.
+  const origins = JSON.parse((db.prepare('SELECT origins FROM notes WHERE path = ?').get(rel) as { origins: string } | undefined)?.origins ?? '{}') as Partial<Origins>;
 
   // Events and commits name a note where it was then. Walk renames back from
   // where it is now, and keep the old paths the index still sends here: one
@@ -146,7 +147,9 @@ export function about(vault: Vault, ref: string, options: AboutOptions = {}): Ab
   const paths = [rel, ...earlier];
   const atPaths = `path IN (${marks(paths.length)})`;
   const readVerbs = `verb IN (${marks(READS.length)})`;
-  // Who else reads a note, and how they came to it, is the owner's to know.
+  // Who else reads a note, and how they came to it, is the owner's to know. Sums over
+  // everyone stay whole, the reads per day and the together weights: heat, recall
+  // and suggest already show an agent those.
   const mine = owner ? '' : ' AND actor = ?';
   const me = owner ? [] : [vault.principal.name];
 
@@ -207,12 +210,14 @@ export function about(vault: Vault, ref: string, options: AboutOptions = {}): Ab
     .map((row) => ({ actor: row.actor, count: row.n, last: new Date(row.last).toISOString() }));
 
   // A note an event came from is named where it was then: say where it is now, and only if the caller can see it.
+  // Only a path or an old path counts, never a title that happens to read the same.
   // For the owner, a note that is gone still says how it got here.
   const noteAt = db.prepare('SELECT path, sensitivity FROM notes WHERE path = ?');
+  const movedTo = db.prepare("SELECT n.path, n.sensitivity FROM aliases a JOIN notes n ON n.path = a.path WHERE a.key = ? AND a.origin = 'old_path' LIMIT 1");
   const whereNow = (old: string): string | null => {
-    const row = noteAt.get(old) as { path: string; sensitivity: Sensitivity } | undefined;
+    const row = (noteAt.get(old) ?? movedTo.get(aliasKey(old))) as { path: string; sensitivity: Sensitivity } | undefined;
     if (row) return visible(row.path, row.sensitivity) ? row.path : null;
-    return vault.find(old)?.path ?? (owner ? old : null);
+    return owner ? old : null;
   };
   const leads = new Map<string, { from: string | null; query: string | null; count: number; last: number }>();
   for (const row of db.prepare(`SELECT from_path, query, count(*) AS n, max(time) AS last FROM events WHERE ${atPaths}
