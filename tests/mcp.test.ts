@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { PassThrough } from 'node:stream';
@@ -81,5 +81,55 @@ describe('the vault over MCP', () => {
     } finally {
       vault.close();
     }
+  });
+});
+
+describe('a folder that stops keeping memory', () => {
+  /** Two searches by an agent without a key, with .noto taken away between them. */
+  async function before_and_after(): Promise<Record<string, any>[]> {
+    const vault = await Vault.open(root, {});
+    const input = new PassThrough();
+    const output = new PassThrough();
+    const answers: Record<string, any>[] = [];
+    let waiting: (() => void) | null = null;
+    let buffer = '';
+    output.on('data', (chunk) => {
+      buffer += chunk.toString('utf8');
+      const lines = buffer.split('\n');
+      buffer = lines.pop()!;
+      for (const line of lines.filter(Boolean)) answers.push(JSON.parse(line));
+      waiting?.();
+    });
+    const next = (count: number) => new Promise<void>((resolve) => { waiting = () => { if (answers.length >= count) resolve(); }; waiting(); });
+    const done = serve(vault, { input, output, reopen: () => Vault.open(root, {}) });
+    const search = (id: number) => input.write(`${JSON.stringify({ jsonrpc: '2.0', id, method: 'tools/call', params: { ...META, name: 'search', arguments: { query: 'audit' } } })}\n`);
+    try {
+      search(1);
+      await next(1);
+      rmSync(path.join(root, '.noto'), { recursive: true, force: true });
+      search(2);
+      await next(2);
+    } finally {
+      input.end();
+      await done;
+      vault.close();
+    }
+    return answers;
+  }
+
+  it('is not served once its .noto is taken away', async () => {
+    const [first, second] = await before_and_after();
+    expect(first!.result.isError).toBe(false);
+    expect(second!.result.isError).toBe(true);
+    expect(second!.result.content[0].text).toMatch(/no longer keeps memory/);
+    expect(existsSync(path.join(root, '.noto'))).toBe(false);
+  });
+
+  it('does not give an agent that was turned off its reading back, or make .noto anew', async () => {
+    writeFileSync(path.join(root, '.noto', 'access.yaml'), 'principals:\n  default:\n    read: []\n    verbs: []\n');
+    const [first, second] = await before_and_after();
+    expect(first!.result?.isError ?? true).toBe(true);
+    expect(second!.result?.isError ?? true).toBe(true);
+    expect(existsSync(path.join(root, '.noto'))).toBe(false);
   });
 });

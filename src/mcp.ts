@@ -9,6 +9,8 @@
  * messages goes to stdout.
  */
 
+import { existsSync } from 'node:fs';
+import path from 'node:path';
 import { createInterface } from 'node:readline';
 import type { Verb } from './access.js';
 import { formatRead, formatRecall, formatSearch } from './format.js';
@@ -198,6 +200,14 @@ export interface ServeOptions {
 export function serve(initial: Vault, options: ServeOptions = {}): Promise<void> {
   let vault = initial;
   let broken: string | null = null;
+  /**
+   * The folder's `.noto` is gone: it stopped keeping memory (Noto's Turn Off
+   * moves it to the Trash). Nothing is served then, and the vault is not
+   * opened again, which would make `.noto` anew under no policy at all and
+   * give an agent without a key every open note, one that had been turned off
+   * among them. Putting `.noto` back serves again.
+   */
+  let gone = false;
   const input = options.input ?? process.stdin;
   const output = options.output ?? process.stdout;
   const refreshAfter = options.refreshAfterMs ?? 2000;
@@ -241,6 +251,7 @@ export function serve(initial: Vault, options: ServeOptions = {}): Promise<void>
           return;
         }
         try {
+          if (gone) throw new Error('This folder no longer keeps memory: its .noto folder was removed. Nothing is served until it keeps memory again.');
           if (broken) throw new Error(broken);
           if (Date.now() - refreshedAt > refreshAfter) { vault.refresh(); refreshedAt = Date.now(); }
           const result = callTool(vault, name, (params.arguments && typeof params.arguments === 'object' ? params.arguments : {}) as Json);
@@ -258,7 +269,8 @@ export function serve(initial: Vault, options: ServeOptions = {}): Promise<void>
 
   /** Before a call: when the policy changed, serve under the new one, or refuse if the key no longer counts. */
   const recheck = async () => {
-    if (!options.reopen || !vault.stale()) return;
+    gone = !existsSync(path.join(vault.root, '.noto'));
+    if (gone || !options.reopen || !vault.stale()) return;
     try {
       const next = await options.reopen();
       vault.close();
