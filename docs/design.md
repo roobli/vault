@@ -75,6 +75,13 @@ corroboration and the source card's record move it. Only a person writes
 never given to any principal but the owner: not in reads, search, recall,
 graph or suggestions.
 
+The index keeps, for each of kind, known and sensitivity, where the value came
+from: `note` (its frontmatter), `script`, `folder` (a path prefix in
+`access.yaml`), `config` (a `brain.yaml` field mapping, the card-name rule or
+the dated-name rule) or `default` (nothing said anything). When layers give the
+same sensitivity, the one nearest the note is named: the note, then a script,
+then the folder.
+
 ## Links
 
 Resolution is ported rule for rule from `resolveLink` in `vault.mjs`, the
@@ -303,6 +310,22 @@ The same eight verbs through the CLI and the MCP server:
 
 Every write names its author. A direct write requires the principal's scope;
 anything else must be proposed.
+
+Besides the verbs, the CLI has views over the same index that change nothing:
+`backlinks`, `where`, `graph`, `suggest`, and `about`. `about <note>` (with
+`--json`, the `AboutNote` that `about()` returns) is what a pane beside a note
+in an editor shows: where its kind, known and sensitivity came from; its heat;
+what supersedes it; the notes that link here; the notes it names without a
+link, as `suggest` finds them; what is opened or changed with it; what recall
+finds with its title as the cue, less everything in the lists before; its
+broken links; reads per local day, readers and what led to it; commits and
+appends; and which agents can see it, and why not. It needs the `read` verb,
+leaves out of every list what the caller cannot see, and records nothing.
+Anyone but the owner gets the same refusal for a hidden note as for a missing
+one, and hears only of its own reads and leads, and of itself among the
+agents. It runs on every note switch, so it reads the index by the note's
+own keys; the name matcher behind the mentions is kept by an open vault
+until the index counts a change of names (`names` in its meta table).
 
 ## Indexing
 

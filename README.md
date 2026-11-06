@@ -22,6 +22,7 @@ noto-vault init          # .noto/brain.yaml, .noto/access.yaml, .noto/scripts/
 noto-vault index         # about 9 s for 8,000 notes the first time, under 100 ms after
 noto-vault recall "what did we decide about index names"
 noto-vault search 改造方案
+noto-vault about argus   # what links to a note, what it names, who read it, which agents see it
 noto-vault suggest       # links the notes are missing, each with an id
 noto-vault suggest --review               # one at a time: link it, never, skip; then apply the yes
 noto-vault suggest --propose <id...>      # or name them, as a proposal to review

@@ -9,9 +9,10 @@ import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } fr
 import path from 'node:path';
 import { createInterface } from 'node:readline/promises';
 import { parseArgs } from 'node:util';
+import { about } from './about.js';
 import { accessPath, keyHash } from './access.js';
 import { configPath } from './config.js';
-import { formatRead, formatRecall, formatSearch, formatSuggestion, formatSuggestions, plainEmphasis, terminalEmphasis } from './format.js';
+import { formatAbout, formatRead, formatRecall, formatSearch, formatSuggestion, formatSuggestions, plainEmphasis, terminalEmphasis } from './format.js';
 import { serve } from './mcp.js';
 import { recall } from './recall.js';
 import { dismiss, suggest, toChanges, type Suggestion, type SuggestionType } from './suggest.js';
@@ -27,6 +28,7 @@ const HELP = `noto-vault: a vault of Markdown notes as memory
   noto-vault search <query...>          full text  [--limit n] [--kind k] [--folder dir]
   noto-vault read <note>                a note with its links, hash and heat  [--meta]
   noto-vault backlinks <note>           what links here
+  noto-vault about <note>               everything the vault knows about a note  [--limit n per list]
   noto-vault where <id or name>         where a project or note lives now
   noto-vault visit <note> [--from n]    record that you opened a note
   noto-vault graph [--out file]         nodes and edges as JSON  [--types a,b] [--min w]
@@ -231,6 +233,15 @@ async function main(argv: string[]): Promise<number> {
         if (!words) throw new UsageError('read needs a note.');
         const note = vault.read(words);
         print(note, () => formatRead(note, values.meta !== true));
+        return 0;
+      }
+      case 'about': {
+        if (!words) throw new UsageError('about needs a note.');
+        // Anyone else gets about's own refusal, which says the same for a hidden note as for a missing one.
+        if (vault.principal.owner && !vault.find(words)) throw new UsageError(`No note answers to "${words}".`);
+        const limit = number(values.limit);
+        const info = about(vault, words, limit !== undefined ? { limit } : {});
+        print(info, () => formatAbout(info));
         return 0;
       }
       case 'backlinks': {
