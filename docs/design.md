@@ -193,7 +193,14 @@ the principal its key names, or as `default`.
 
 The file is the person's, often with comments, so the tools that change it
 (`key add`, `key revoke`, and an editor through `addAgent`, `revokeAgent`
-and `setFolderSensitivity`) change only the lines they are about. A revoked
+and `setFolderSensitivity`) change only the lines they are about, in the
+file's own layout. Each change is proved before it is saved: the new text,
+parsed as the server parses it, must equal the old policy with only that
+change applied, or nothing is written. Where the editor and the parser could
+disagree about a shape (a key written twice, a list where a map belongs),
+that proof is what keeps a privacy click from quietly dropping an agent's
+keys or a sealed folder. The file is replaced by a rename, never written in
+place, and a `.noto/` or `access.yaml` that is a link is refused. A revoked
 agent keeps its block, with `keys: []` and a `revoked:` time, so a list can
 say when; `default` is revoked by giving it nothing to read. A folder's
 privacy is its own pattern in one list, added only when the default or a
