@@ -296,3 +296,33 @@ describe('a vault as memory', () => {
     expect(existsSync(path.join(root, '.noto/index.sqlite'))).toBe(true);
   });
 });
+
+describe('who reads the vault', () => {
+  it('counts each reader and says when last, for the owner only', async () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), 'noto-readers-'));
+    try {
+      mkdirSync(path.join(dir, '.noto', 'events', 'h'), { recursive: true });
+      writeFileSync(path.join(dir, 'a.md'), '# A\n');
+      writeFileSync(path.join(dir, '.noto', 'events', 'h', '2026-11.jsonl'), [
+        { time: '2026-11-01T10:00:00.000Z', actor: 'owner', verb: 'open', path: 'a.md' },
+        { time: '2026-11-03T10:00:00.000Z', actor: 'claude-code', verb: 'read', path: 'a.md' },
+        { time: '2026-11-02T10:00:00.000Z', actor: 'claude-code', verb: 'recall', path: 'a.md' },
+        { time: '2026-11-04T10:00:00.000Z', actor: 'claude-code', verb: 'propose', path: 'a.md' },
+      ].map((line) => JSON.stringify(line)).join('\n') + '\n');
+      const owner = await Vault.open(dir, { owner: true });
+      const stranger = await Vault.open(dir, {});
+      try {
+        expect(owner.readers()).toEqual([
+          { actor: 'claude-code', count: 2, last: '2026-11-03T10:00:00.000Z' },
+          { actor: 'owner', count: 1, last: '2026-11-01T10:00:00.000Z' },
+        ]);
+        expect(() => stranger.readers()).toThrow();
+      } finally {
+        owner.close();
+        stranger.close();
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});

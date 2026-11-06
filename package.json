@@ -26,6 +26,14 @@
     "./events": {
       "types": "./dist/events.d.ts",
       "import": "./dist/events.js"
+    },
+    "./policy": {
+      "types": "./dist/policy.d.ts",
+      "import": "./dist/policy.js"
+    },
+    "./cli": {
+      "types": "./dist/cli.d.ts",
+      "import": "./dist/cli.js"
     }
   },
   "engines": {

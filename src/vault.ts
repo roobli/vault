@@ -597,6 +597,13 @@ export class Vault {
     return proposalFile(this.requireRepo(), id, rel);
   }
 
+  /** Who has read the folder's notes, how often and when last: the owner and each agent. The owner's to ask. */
+  readers(): { actor: string; count: number; last: string }[] {
+    if (!this.principal.owner) throw new AccessError(`${this.principal.name} may not see who reads this vault.`);
+    return (this.store.db.prepare("SELECT actor, COUNT(*) AS count, MAX(time) AS last FROM events WHERE verb IN ('open', 'read', 'recall', 'cite') GROUP BY actor ORDER BY last DESC").all() as
+      { actor: string; count: number; last: number }[]).map((row) => ({ actor: row.actor, count: row.count, last: new Date(row.last).toISOString() }));
+  }
+
   /** Whether the vault is in a git repository, which proposals need. */
   inGit(): boolean {
     return this.repo !== null;
