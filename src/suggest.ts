@@ -26,7 +26,7 @@ import type { FileChange } from './git.js';
 import { maskCode, splitFrontmatter } from './markdown.js';
 import { decay } from './memory.js';
 import { dirOf, nameOf } from './paths.js';
-import { buildResolveIndex, wikiLinkTo } from './resolve.js';
+import { buildResolveIndex, wikiLinkTo, type ResolveIndex } from './resolve.js';
 import { hasCjk } from './tokenize.js';
 import { scriptContext } from './scripts.js';
 import { AccessError, type Vault } from './vault.js';
@@ -219,32 +219,66 @@ function nearness(from: NoteLite, to: NoteLite, named: boolean): number {
   return from.kind === 'log' || named ? Math.max(near, 0.8) : near;
 }
 
+interface Target { path: string; weight: number; name: string; card: boolean }
+
+/**
+ * The notes this principal can see, and once asked for, the matcher over
+ * their names. Building the matcher over every title is most of what one
+ * note's mentions cost, and it stays the same until a note is added, removed,
+ * renamed, retitled or seen differently, which the index counts in its
+ * `names` meta key. So an open vault keeps the table between calls, as an
+ * editor that asks on every note switch needs.
+ */
+interface NameTable {
+  readonly version: string | null;
+  readonly notes: readonly NoteLite[];
+  readonly byPath: ReadonlyMap<string, NoteLite>;
+  matcher?: { readonly matcher: Matcher; readonly targets: readonly Target[]; readonly index: ResolveIndex };
+}
+
+const tables = new WeakMap<Vault, NameTable>();
+
+function nameTable(vault: Vault): NameTable {
+  const version = vault.store.meta('names');
+  const kept = tables.get(vault);
+  if (kept && version !== null && kept.version === version) return kept;
+  const notes = (vault.store.db.prepare('SELECT path, title, kind, source, sensitivity, aliases, id FROM notes').all() as
+    { path: string; title: string; kind: Kind; source: string | null; sensitivity: Sensitivity; aliases: string; id: string | null }[])
+    .map((row) => ({ ...row, aliases: JSON.parse(row.aliases) as string[] }))
+    .filter((row) => vault.canSee(row)) as NoteLite[];
+  const table: NameTable = { version, notes, byPath: new Map(notes.map((note) => [note.path, note])) };
+  // An index from before the counter says nothing about when it changes: build afresh each time.
+  if (version !== null) tables.set(vault, table);
+  return table;
+}
+
 export function suggest(vault: Vault, options: SuggestOptions = {}): Suggestion[] {
   vault.requireVerb('search');
   const db = vault.store.db;
   const types = new Set(options.types ?? ['mention', 'together', 'stale', 'script']);
   const hidden = options.dismissed ? new Set<string>() : dismissedIds(vault.root);
-  const notes = (db.prepare('SELECT path, title, kind, source, sensitivity, aliases, id FROM notes').all() as
-    { path: string; title: string; kind: Kind; source: string | null; sensitivity: Sensitivity; aliases: string; id: string | null }[])
-    .map((row) => ({ ...row, aliases: JSON.parse(row.aliases) as string[] }))
-    .filter((row) => vault.canSee(row)) as NoteLite[];
-  const byPath = new Map(notes.map((note) => [note.path, note]));
+  const table = nameTable(vault);
+  const { notes, byPath } = table;
   const fromSet = options.from ? new Set(options.from.map((ref) => vault.find(ref)?.path).filter((rel): rel is string => !!rel)) : null;
   const sources = fromSet ? notes.filter((note) => fromSet.has(note.path)) : notes;
 
-  // Who already links to whom, either way.
-  const linked = new Set<string>();
-  for (const row of db.prepare("SELECT DISTINCT src, resolved FROM links WHERE resolved IS NOT NULL AND kind != 'img'").all() as { src: string; resolved: string }[]) {
-    linked.add(`${row.src}\0${row.resolved}`);
-  }
-  const links = (a: string, b: string) => linked.has(`${a}\0${b}`);
-  const files = (db.prepare('SELECT path FROM files').all() as { path: string }[]).map((row) => row.path);
-  const index = buildResolveIndex(files);
+  // Who already links to whom, either way: for the whole vault every link read
+  // once, for a few notes each one's links asked of the index when needed.
+  const linked = fromSet ? null : new Set((db.prepare("SELECT DISTINCT src, resolved FROM links WHERE resolved IS NOT NULL AND kind != 'img'").all() as
+    { src: string; resolved: string }[]).map((row) => `${row.src}\0${row.resolved}`));
+  const linksOf = db.prepare("SELECT DISTINCT resolved FROM links WHERE src = ? AND resolved IS NOT NULL AND kind != 'img'");
+  const asked = new Map<string, Set<string>>();
+  const links = (a: string, b: string): boolean => {
+    if (linked) return linked.has(`${a}\0${b}`);
+    let out = asked.get(a);
+    if (!out) asked.set(a, out = new Set((linksOf.all(a) as { resolved: string }[]).map((row) => row.resolved)));
+    return out.has(b);
+  };
   const now = Date.now();
   const heat = (rel: string) => vault.heatOf(rel, now).heat;
   const out: Suggestion[] = [];
 
-  if (types.has('mention')) out.push(...mentions(vault, sources, notes, links, heat));
+  if (types.has('mention')) out.push(...mentions(vault, table, sources, links, heat));
 
   if (types.has('together')) {
     const weightsAt = Number(vault.store.meta('weights_at') ?? now);
@@ -260,6 +294,8 @@ export function suggest(vault: Vault, options: SuggestOptions = {}): Suggestion[
       pair.types.add(row.type);
     }
     for (const pair of pairs.values()) {
+      // The note a suggestion is from is one of the two, so a pair outside the asked notes can go before any link is looked up.
+      if (fromSet && !fromSet.has(pair.a) && !fromSet.has(pair.b)) continue;
       if (pair.weight < 0.8 || links(pair.a, pair.b) || links(pair.b, pair.a)) continue;
       const a = byPath.get(pair.a);
       const b = byPath.get(pair.b);
@@ -277,6 +313,8 @@ export function suggest(vault: Vault, options: SuggestOptions = {}): Suggestion[
   }
 
   if (types.has('stale')) {
+    const files = (db.prepare('SELECT path FROM files').all() as { path: string }[]).map((row) => row.path);
+    const index = buildResolveIndex(files);
     const rows = db.prepare(`SELECT l.src, l.kind, l.target, l.anchor, l.label, l.line, l.start, l.end, l.resolved FROM links l
       WHERE l.via = 'alias' AND l.start >= 0`).all() as { src: string; kind: 'wiki' | 'md'; target: string; anchor: string; label: string | null; line: number; start: number; end: number; resolved: string }[];
     for (const row of rows) {
@@ -335,9 +373,12 @@ export function suggest(vault: Vault, options: SuggestOptions = {}): Suggestion[
   return options.limit ? kept.slice(0, options.limit) : kept;
 }
 
-function mentions(vault: Vault, sources: readonly NoteLite[], notes: readonly NoteLite[], links: (a: string, b: string) => boolean, heat: (rel: string) => number): Suggestion[] {
+/** The matcher over every name a note can be mentioned by, built once per name table. */
+function mentionMatcher(vault: Vault, table: NameTable): NonNullable<NameTable['matcher']> {
+  if (table.matcher) return table.matcher;
+  const { notes } = table;
   const matcher = new Matcher();
-  const targets: { path: string; weight: number; name: string; card: boolean }[] = [];
+  const targets: Target[] = [];
   const seen = new Map<string, number>();
   const add = (name: string, note: NoteLite, fromCard: boolean) => {
     const weight = distinctive(name, fromCard);
@@ -368,7 +409,13 @@ function mentions(vault: Vault, sources: readonly NoteLite[], notes: readonly No
     for (const alias of written.get(note.path) ?? []) add(alias, note, card);
   }
   matcher.build();
+  table.matcher = { matcher, targets, index: buildResolveIndex(notes.map((note) => note.path)) };
+  return table.matcher;
+}
 
+function mentions(vault: Vault, table: NameTable, sources: readonly NoteLite[], links: (a: string, b: string) => boolean, heat: (rel: string) => number): Suggestion[] {
+  const { notes, byPath } = table;
+  const { matcher, targets, index } = mentionMatcher(vault, table);
   const perNote: { from: NoteLite; start: number; end: number; pattern: number; text: string }[] = [];
   const documentFrequency = new Map<number, number>();
   for (const from of sources) {
@@ -414,11 +461,9 @@ function mentions(vault: Vault, sources: readonly NoteLite[], notes: readonly No
   // A name that turns up in many notes is a word, not a reference.
   const ceiling = Math.max(15, Math.ceil(notes.length * 0.005));
   const out: Suggestion[] = [];
-  const files = notes.map((note) => note.path);
-  const index = buildResolveIndex(files);
   for (const { from, start, end, pattern, text } of perNote) {
     const target = targets[pattern]!;
-    const to = notes.find((note) => note.path === target.path);
+    const to = byPath.get(target.path);
     if (!to) continue;
     const frequency = documentFrequency.get(pattern) ?? 0;
     const card = target.card;

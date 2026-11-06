@@ -80,6 +80,26 @@ describe('suggest', () => {
     }
   });
 
+  it('sees a note retitled since the last call, from a vault that stayed open', async () => {
+    write('Areas/Search/Design/source.md', '# Source\n\n先看拆解清单再说。\n');
+    write('Areas/Search/Design/plan.md', '# Plan\n\n一二三。\n');
+    const vault = await Vault.open(root, { owner: true });
+    try {
+      const from = 'Areas/Search/Design/source.md';
+      const ask = () => suggest(vault, { from: [from], types: ['mention'] });
+      expect(mention(ask(), from, 'Areas/Search/Design/plan.md')).toBeUndefined();
+      // New words alone keep the names; a new title changes them.
+      write('Areas/Search/Design/plan.md', '# Plan\n\n一二三四。\n');
+      vault.refresh({ paths: ['Areas/Search/Design/plan.md'] });
+      expect(mention(ask(), from, 'Areas/Search/Design/plan.md')).toBeUndefined();
+      write('Areas/Search/Design/plan.md', '# 拆解清单\n\n一二三四。\n');
+      vault.refresh({ paths: ['Areas/Search/Design/plan.md'] });
+      expect(mention(ask(), from, 'Areas/Search/Design/plan.md')?.around).toEqual(['先看', '拆解清单', '再说。']);
+    } finally {
+      vault.close();
+    }
+  });
+
   it('keeps an id per kind and pair, and never suggests a dismissed one again', async () => {
     const owner = await Vault.open(root, { owner: true });
     const stranger = await Vault.open(root, {});

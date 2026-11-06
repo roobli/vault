@@ -199,6 +199,15 @@ function buildNote(ix: IndexContext, rel: string, text: string, hash: string): B
   };
 }
 
+/**
+ * What a note is called and who may see it, which is all that a table of
+ * names built from the index depends on. Its body can change without this.
+ */
+function nameKey(row: { title: string; kind: string; source: string | null; sensitivity: string; aliases: string; frontmatter: string }): string {
+  const fm = JSON.parse(row.frontmatter) as Record<string, unknown>;
+  return JSON.stringify([row.title, row.kind, row.source, row.sensitivity, row.aliases, fm.id ?? null, fm.aliases ?? null]);
+}
+
 function readText(file: string): { text: string; hash: string } | null {
   try {
     const buffer = readFileSync(file);
@@ -313,6 +322,9 @@ export function refresh(ix: IndexContext, options: { full?: boolean; paths?: rea
   const insertLink = db.prepare('INSERT INTO links(src, kind, target, anchor, label, relation, line, start, end) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)');
   const insertAlias = db.prepare('INSERT INTO aliases(key, path, origin) VALUES (?, ?, ?)');
   const insertRename = db.prepare('INSERT INTO renames(old, new, time, origin) VALUES (?, ?, ?, ?)');
+  const priorNames = db.prepare('SELECT title, kind, source, sensitivity, aliases, frontmatter FROM notes WHERE path = ?');
+  // A counter, not a time: two refreshes in one millisecond must still read as two changes.
+  const bumpNames = db.prepare("INSERT INTO meta(key, value) VALUES ('names', '1') ON CONFLICT(key) DO UPDATE SET value = CAST(value AS INTEGER) + 1");
 
   const changedNotes = new Set<string>();
   const priorAliases = new Map<string, string>();
@@ -323,6 +335,9 @@ export function refresh(ix: IndexContext, options: { full?: boolean; paths?: rea
   const now = Date.now();
 
   store.transaction(() => {
+    // Whether any note was added, removed, renamed, retitled, or became visible to someone else.
+    // `names` in meta counts these, so a table of names can be kept until it moves.
+    let namesChanged = full;
     if (full) {
       // FTS5's own command: deleting a contentless table's rows one by one is slow.
       db.exec("DELETE FROM notes; INSERT INTO fts(fts) VALUES ('delete-all'); DELETE FROM links; DELETE FROM aliases WHERE origin IN ('id', 'alias'); DELETE FROM files;");
@@ -332,7 +347,7 @@ export function refresh(ix: IndexContext, options: { full?: boolean; paths?: rea
     const removedHashes = new Map<string, string>();
     for (const rel of removed) {
       const hash = hashes.get(rel);
-      if (hash) removedHashes.set(hash, rel);
+      if (hash) { removedHashes.set(hash, rel); namesChanged = true; }
       const row = noteId.get(rel) as { nid: number } | undefined;
       if (row) { deleteFts.run(row.nid); deleteNote.run(row.nid); }
       deleteLinks.run(rel);
@@ -374,6 +389,10 @@ export function refresh(ix: IndexContext, options: { full?: boolean; paths?: rea
       // Other notes' links may resolve through this note's names: if they changed, every link is looked at again.
       const before = priorAliases.get(rel);
       if (before !== undefined && before !== built.row.aliases) aliasesChanged = true;
+      if (!namesChanged) {
+        const was = priorNames.get(rel) as Parameters<typeof nameKey>[0] | undefined;
+        namesChanged = !was || nameKey(was) !== nameKey(built.row);
+      }
       const prior = noteId.get(rel) as { nid: number } | undefined;
       if (prior) deleteFts.run(prior.nid);
       deleteLinks.run(rel);
@@ -394,6 +413,7 @@ export function refresh(ix: IndexContext, options: { full?: boolean; paths?: rea
     for (const [rel, stat] of disk) {
       if (!stat.note && (full || !known.has(rel))) insertFile.run(rel, 0, 0, 0);
     }
+    if (namesChanged) bumpNames.run();
     if (parsed > 0) lap(`notes loop: read ${Math.round(readMs)} ms, parse ${Math.round(buildMs)} ms, full text ${Math.round(ftsMs)} ms, other writes ${Math.round(performance.now() - loopStart - readMs - buildMs - ftsMs)} ms`);
   });
 
