@@ -75,8 +75,10 @@ describe('what an agent cannot reach', () => {
     try {
       expect(agent.proposals()).toEqual([]);
       expect(() => agent.proposalDiff(id)).toThrow(AccessError);
+      expect(() => agent.proposalFile(id, 'Priv/secret.md')).toThrow(/no proposal/);
       const mine = agent.propose([{ path: 'Pub/user.md', content: '# User\n\nedited\n' }], 'agent change');
       expect(agent.proposals().map((proposal) => proposal.id)).toEqual([mine.id]);
+      expect(agent.proposalFile(mine.id, 'Pub/user.md').proposed).toBe('# User\n\nedited\n');
     } finally {
       agent.close();
     }
@@ -90,6 +92,10 @@ describe('proposals that move notes', () => {
       const text = readFileSync(path.join(root, 'Pub/old.md'), 'utf8');
       const { id } = owner.propose([{ path: 'Pub/old.md', content: null }, { path: 'Pub/new.md', content: text }], 'move it');
       expect(owner.proposalDiff(id)).toContain('deleted file mode');
+      // Each file at both ends, for showing side by side; null where there is none.
+      expect(owner.proposalFile(id, 'Pub/old.md')).toEqual({ base: text, proposed: null });
+      expect(owner.proposalFile(id, 'Pub/new.md')).toEqual({ base: null, proposed: text });
+      expect(() => owner.proposalFile(id, 'Pub/user.md')).toThrow(/does not change/);
       const result = owner.accept(id);
       expect([...result.applied].sort()).toEqual(['Pub/new.md', 'Pub/old.md']);
       expect(existsSync(path.join(root, 'Pub/old.md'))).toBe(false);

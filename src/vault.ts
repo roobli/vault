@@ -11,7 +11,7 @@ import { loadConfig, type BrainConfig, type Kind, type Source } from './config.j
 import { addRelationLines, appendEntry, datedPath, relationWord } from './edit.js';
 import { recordEvents, newSession, type EventVerb } from './events.js';
 import { splitFrontmatter } from './markdown.js';
-import { acceptProposal, createProposal, findRepo, listProposals, proposalDiff, rejectProposal, type AcceptResult, type FileChange, type GitRepo, type Proposal } from './git.js';
+import { acceptProposal, createProposal, findRepo, listProposals, proposalDiff, proposalFile, rejectProposal, type AcceptResult, type FileChange, type GitRepo, type Proposal } from './git.js';
 import { refresh, type IndexContext, type RefreshStats } from './indexer.js';
 import { decay } from './memory.js';
 import { isMarkdown, nameOf, normalise } from './paths.js';
@@ -583,6 +583,18 @@ export class Vault {
       throw new AccessError(`${this.principal.name} may only see its own proposals.`);
     }
     return proposalDiff(this.requireRepo(), id);
+  }
+
+  /**
+   * One file of a proposal at both ends, for showing it side by side: as it
+   * was when the proposal was made, and as proposed. Null where the file did
+   * not exist, or would not.
+   */
+  proposalFile(id: string, rel: string): { base: string | null; proposed: string | null } {
+    const proposal = this.proposals().find((item) => item.id === id);
+    if (!proposal) throw new Error(`There is no proposal ${id}${this.principal.owner ? '' : ` by ${this.principal.name}`}.`);
+    if (!proposal.files.some((file) => file.path === rel)) throw new Error(`The proposal ${id} does not change ${rel}.`);
+    return proposalFile(this.requireRepo(), id, rel);
   }
 
   accept(id: string): AcceptResult {

@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'nod
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { dismiss, suggest, suggestionId } from '../src/suggest.js';
+import { dismiss, dismissals, suggest, suggestionId, undismiss } from '../src/suggest.js';
 import { AccessError, Vault } from '../src/vault.js';
 
 let root: string;
@@ -115,6 +115,35 @@ describe('suggest', () => {
       expect(suggest(owner, { dismissed: true }).some((item) => item.id === first.id)).toBe(true);
       // Other suggestions to the same note stay.
       expect(mention(suggest(owner), 'Areas/Search/Design/notes.md', 'Areas/Search/Design/目标设计说明.md')).toBeDefined();
+    } finally {
+      owner.close();
+      stranger.close();
+    }
+  });
+
+  it('lists what was dismissed, the latest first, and brings some or all of it back', async () => {
+    const owner = await Vault.open(root, { owner: true });
+    const stranger = await Vault.open(root, {});
+    try {
+      const target = 'Areas/Search/Design/目标设计说明.md';
+      const first = mention(suggest(owner), 'Elsewhere/essay.md', target)!;
+      const second = mention(suggest(owner), 'Areas/Search/Design/notes.md', target)!;
+      dismiss(owner, [first]);
+      dismiss(owner, [second]);
+      // A line broken by hand is kept through every rewrite.
+      writeFileSync(path.join(root, '.noto/dismissed.jsonl'), `${readFileSync(path.join(root, '.noto/dismissed.jsonl'), 'utf8')}{ broken\n`);
+      expect(dismissals(owner).map((item) => item.id)).toEqual([second.id, first.id]);
+      expect(dismissals(owner)[0]).toMatchObject({ type: 'mention', from: 'Areas/Search/Design/notes.md', to: target });
+      expect(() => dismissals(stranger)).toThrow(AccessError);
+      expect(() => undismiss(stranger, 'all')).toThrow(AccessError);
+
+      expect(undismiss(owner, [first.id])).toBe(1);
+      expect(suggest(owner).some((item) => item.id === first.id)).toBe(true);
+      expect(suggest(owner).some((item) => item.id === second.id)).toBe(false);
+      expect(undismiss(owner, [first.id])).toBe(0);
+      expect(undismiss(owner, 'all')).toBe(1);
+      expect(dismissals(owner)).toEqual([]);
+      expect(readFileSync(path.join(root, '.noto/dismissed.jsonl'), 'utf8')).toBe('{ broken\n');
     } finally {
       owner.close();
       stranger.close();

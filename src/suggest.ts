@@ -17,7 +17,7 @@
  */
 
 import { createHash } from 'node:crypto';
-import { appendFileSync, mkdirSync, readFileSync } from 'node:fs';
+import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import type { Kind } from './config.js';
 import type { Sensitivity } from './access.js';
@@ -168,29 +168,48 @@ export function suggestionId(type: SuggestionType, from: string, to: string): st
 
 const dismissedPath = (root: string) => path.join(root, '.noto', 'dismissed.jsonl');
 
+/** A suggestion the person said no to, as `.noto/dismissed.jsonl` keeps it. */
+export interface Dismissal {
+  readonly id: string;
+  readonly type: SuggestionType;
+  readonly from: string;
+  readonly to: string;
+  /** When it was dismissed; null for a line written without one. */
+  readonly time: string | null;
+}
+
 /**
- * The ids of the suggestions the person said no to. The file keeps the type
- * and both paths, not the id, so it reads without this code.
+ * The file's lines, each read as a dismissal or kept as it was. The file
+ * keeps the type and both paths, not the id, so it reads without this code.
  * yagni: a dismissal is by path, so it lapses when either note moves; key it
  * by the note's id or content hash if moves turn out to bring them back.
  */
-function dismissedIds(root: string): Set<string> {
-  const ids = new Set<string>();
+function dismissedLines(root: string): { line: string; entry: Dismissal | null }[] {
   let text: string;
-  try { text = readFileSync(dismissedPath(root), 'utf8'); } catch { return ids; }
-  for (const line of text.split('\n')) {
-    if (!line.trim()) continue;
+  try { text = readFileSync(dismissedPath(root), 'utf8'); } catch { return []; }
+  return text.split('\n').filter((line) => line.trim()).map((line) => {
     try {
-      const entry = JSON.parse(line) as { type?: SuggestionType; from?: string; to?: string };
-      if (entry.type && entry.from && entry.to) ids.add(suggestionId(entry.type, entry.from, entry.to));
-    } catch { /* A line someone broke by hand says nothing; the rest still count. */ }
-  }
-  return ids;
+      const entry = JSON.parse(line) as { type?: SuggestionType; from?: string; to?: string; time?: string };
+      if (!entry.type || !entry.from || !entry.to) return { line, entry: null };
+      return { line, entry: { id: suggestionId(entry.type, entry.from, entry.to), type: entry.type, from: entry.from, to: entry.to, time: typeof entry.time === 'string' ? entry.time : null } };
+    } catch {
+      // A line someone broke by hand says nothing; the rest still count.
+      return { line, entry: null };
+    }
+  });
 }
+
+function dismissedIds(root: string): Set<string> {
+  return new Set(dismissedLines(root).flatMap(({ entry }) => (entry ? [entry.id] : [])));
+}
+
+const ownerOnly = (vault: Vault, what: string) => {
+  if (!vault.principal.owner) throw new AccessError(`${vault.principal.name} may not ${what}; only the owner writes under .noto/.`);
+};
 
 /** Say no to suggestions, for good. Only the owner writes under `.noto/`. */
 export function dismiss(vault: Vault, items: readonly Suggestion[]): number {
-  if (!vault.principal.owner) throw new AccessError(`${vault.principal.name} may not dismiss suggestions; only the owner writes under .noto/.`);
+  ownerOnly(vault, 'dismiss suggestions');
   const known = dismissedIds(vault.root);
   const time = new Date().toISOString();
   const lines = items.filter((item) => !known.has(item.id) && known.add(item.id))
@@ -199,6 +218,37 @@ export function dismiss(vault: Vault, items: readonly Suggestion[]): number {
   mkdirSync(path.dirname(dismissedPath(vault.root)), { recursive: true });
   appendFileSync(dismissedPath(vault.root), `${lines.join('\n')}\n`);
   return lines.length;
+}
+
+/** What the person said no to, the latest first; one entry per suggestion. */
+export function dismissals(vault: Vault): Dismissal[] {
+  ownerOnly(vault, 'read the dismissed suggestions');
+  const seen = new Set<string>();
+  const out: Dismissal[] = [];
+  for (const { entry } of dismissedLines(vault.root).reverse()) {
+    if (entry && !seen.has(entry.id)) { seen.add(entry.id); out.push(entry); }
+  }
+  return out;
+}
+
+/**
+ * Take dismissals back, these ids or every one, so the suggestions come again.
+ * Lines that do not read as a dismissal are kept as they were. Resolves with
+ * how many suggestions came back.
+ */
+export function undismiss(vault: Vault, ids: readonly string[] | 'all'): number {
+  ownerOnly(vault, 'bring dismissed suggestions back');
+  const lines = dismissedLines(vault.root);
+  const wanted = ids === 'all' ? null : new Set(ids);
+  const back = new Set<string>();
+  const kept = lines.filter(({ entry }) => {
+    if (!entry || (wanted && !wanted.has(entry.id))) return true;
+    back.add(entry.id);
+    return false;
+  });
+  if (back.size === 0) return 0;
+  writeFileSync(dismissedPath(vault.root), kept.length === 0 ? '' : `${kept.map(({ line }) => line).join('\n')}\n`);
+  return back.size;
 }
 
 /**

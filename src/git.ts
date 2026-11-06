@@ -207,6 +207,13 @@ const showFile = (repo: GitRepo, commit: string, rel: string): string | null => 
   return result.status === 0 ? result.stdout.toString('utf8') : null;
 };
 
+/** One file of a proposal, as it was when the proposal was made and as proposed; null where there is no file. */
+export function proposalFile(repo: GitRepo, id: string, rel: string): { base: string | null; proposed: string | null } {
+  const ref = `${PROPOSAL_REFS}/${id}`;
+  const commit = git(repo.top, ['rev-parse', '--verify', ref]).trim();
+  return { base: showFile(repo, `${commit}~1`, rel), proposed: showFile(repo, commit, rel) };
+}
+
 export interface AcceptResult {
   readonly applied: readonly string[];
   readonly unchanged: readonly string[];

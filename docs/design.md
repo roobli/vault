@@ -237,7 +237,10 @@ the person's index and their branches are never touched, and the refs are not
 branches, so nothing pushes them.
 
 Proposals are diffed without rename detection: a move is a deletion and an
-addition, and the reviewer sees and the accept applies both. Accepting merges
+addition, and the reviewer sees and the accept applies both. For showing one
+file side by side, `vault.proposalFile(id, path)` gives it at both ends, null
+where the file did not or will not exist; anyone but the owner sees only
+their own proposals' files. Accepting merges
 each file three ways (`git merge-file`: the file now, the base, the proposal)
 into the working tree, and stops on a conflict for that file. The person commits the result their usual way. Accepting or rejecting
 deletes the ref and records an event.
@@ -271,7 +274,10 @@ A no is a line in `.noto/dismissed.jsonl`:
 ```
 
 The file holds the type and both paths, not the id, so it reads without this
-package; a dismissal lapses when either note moves.
+package; a dismissal lapses when either note moves. `dismissals(vault)` lists
+them, the latest first, and `undismiss(vault, ids | 'all')` takes some or all
+back, keeping any line it cannot read as it was; both are the owner's, as
+writing the file is.
 
 ## Scripts
 
