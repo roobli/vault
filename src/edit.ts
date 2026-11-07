@@ -39,6 +39,8 @@ export interface Splice {
   readonly start: number;
   readonly end: number;
   readonly replacement: string;
+  /** The text it replaces, when it was found: a note changed since no longer has it there. */
+  readonly original?: string;
 }
 
 /** Apply non-overlapping splices; overlapping ones after the first are dropped. */

@@ -75,10 +75,39 @@ describe('what an agent cannot reach', () => {
     try {
       expect(agent.proposals()).toEqual([]);
       expect(() => agent.proposalDiff(id)).toThrow(AccessError);
+      expect(() => agent.proposalFile(id, 'Priv/secret.md')).toThrow(/no proposal/);
       const mine = agent.propose([{ path: 'Pub/user.md', content: '# User\n\nedited\n' }], 'agent change');
       expect(agent.proposals().map((proposal) => proposal.id)).toEqual([mine.id]);
+      expect(agent.proposalFile(mine.id, 'Pub/user.md').proposed).toBe('# User\n\nedited\n');
     } finally {
       agent.close();
+    }
+  });
+});
+
+describe('what a proposal may change', () => {
+  it('is never the folder\'s settings or a dot folder, however the proposal was made', async () => {
+    // The vault makes no such proposal, but anyone with git can write the ref: Accept is where it is checked.
+    const run = (args: string[], input?: string) => execFileSync('git', args, {
+      cwd: root, input, env: { ...process.env, GIT_INDEX_FILE: path.join(root, '.git', 'scratch-index'), GIT_AUTHOR_NAME: 'agent', GIT_AUTHOR_EMAIL: 'a@b.c', GIT_COMMITTER_NAME: 'agent', GIT_COMMITTER_EMAIL: 'a@b.c' },
+    }).toString().trim();
+    run(['read-tree', 'HEAD']);
+    const base = run(['commit-tree', run(['write-tree']), '-p', 'HEAD', '-m', 'base: widen access']);
+    const stage = (rel: string, text: string) => run(['update-index', '--add', '--cacheinfo', `100644,${run(['hash-object', '-w', '--stdin'], text)},${rel}`]);
+    stage('.noto/access.yaml', 'principals:\n  agent:\n    read: ["**"]\n');
+    stage('Pub/user.md', '# User\n\nfine\n');
+    run(['update-ref', 'refs/noto/proposals/20261105-000000-widen-access', run(['commit-tree', run(['write-tree']), '-p', base, '-m', 'widen access'])]);
+    const before = readFileSync(path.join(root, '.noto/access.yaml'), 'utf8');
+    const owner = await Vault.open(root, { owner: true });
+    try {
+      expect(() => owner.accept('20261105-000000-widen-access')).toThrow(/settings and dot folders/);
+      expect(readFileSync(path.join(root, '.noto/access.yaml'), 'utf8')).toBe(before);
+      expect(readFileSync(path.join(root, 'Pub/user.md'), 'utf8')).not.toContain('fine');
+      // It stays, to be rejected.
+      expect(owner.proposals().some((proposal) => proposal.id === '20261105-000000-widen-access')).toBe(true);
+      expect(owner.inGit()).toBe(true);
+    } finally {
+      owner.close();
     }
   });
 });
@@ -90,6 +119,10 @@ describe('proposals that move notes', () => {
       const text = readFileSync(path.join(root, 'Pub/old.md'), 'utf8');
       const { id } = owner.propose([{ path: 'Pub/old.md', content: null }, { path: 'Pub/new.md', content: text }], 'move it');
       expect(owner.proposalDiff(id)).toContain('deleted file mode');
+      // Each file at both ends, for showing side by side; null where there is none.
+      expect(owner.proposalFile(id, 'Pub/old.md')).toEqual({ base: text, proposed: null });
+      expect(owner.proposalFile(id, 'Pub/new.md')).toEqual({ base: null, proposed: text });
+      expect(() => owner.proposalFile(id, 'Pub/user.md')).toThrow(/does not change/);
       const result = owner.accept(id);
       expect([...result.applied].sort()).toEqual(['Pub/new.md', 'Pub/old.md']);
       expect(existsSync(path.join(root, 'Pub/old.md'))).toBe(false);

@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'nod
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { dismiss, suggest, suggestionId } from '../src/suggest.js';
+import { dismiss, dismissals, prepare, suggest, suggestionId, undismiss } from '../src/suggest.js';
 import { AccessError, Vault } from '../src/vault.js';
 
 let root: string;
@@ -80,6 +80,43 @@ describe('suggest', () => {
     }
   });
 
+  it('sees a note retitled since the last call, from a vault that stayed open', async () => {
+    write('Areas/Search/Design/source.md', '# Source\n\n先看拆解清单再说。\n');
+    write('Areas/Search/Design/plan.md', '# Plan\n\n一二三。\n');
+    const vault = await Vault.open(root, { owner: true });
+    try {
+      const from = 'Areas/Search/Design/source.md';
+      const ask = () => suggest(vault, { from: [from], types: ['mention'] });
+      expect(mention(ask(), from, 'Areas/Search/Design/plan.md')).toBeUndefined();
+      // New words alone keep the names; a new title changes them.
+      write('Areas/Search/Design/plan.md', '# Plan\n\n一二三四。\n');
+      vault.refresh({ paths: ['Areas/Search/Design/plan.md'] });
+      expect(mention(ask(), from, 'Areas/Search/Design/plan.md')).toBeUndefined();
+      write('Areas/Search/Design/plan.md', '# 拆解清单\n\n一二三四。\n');
+      vault.refresh({ paths: ['Areas/Search/Design/plan.md'] });
+      expect(mention(ask(), from, 'Areas/Search/Design/plan.md')?.around).toEqual(['先看', '拆解清单', '再说。']);
+    } finally {
+      vault.close();
+    }
+  });
+
+  it('gives one note the same mentions, scored the same, as the whole folder does, and follows an edit to it', async () => {
+    const vault = await Vault.open(root, { owner: true });
+    try {
+      const from = 'Areas/Search/Design/notes.md';
+      const all = suggest(vault, { types: ['mention'] });
+      const one = suggest(vault, { types: ['mention'], from: [from] });
+      expect(one.length).toBeGreaterThan(0);
+      expect(one.map((item) => [item.id, item.score])).toEqual(all.filter((item) => item.from === from).map((item) => [item.id, item.score]));
+      // An edit to the note is read again; the others are not read at all.
+      write(from, '# Notes\n\n先读目标设计说明，再看学习方案。\n');
+      vault.refresh({ paths: [from] });
+      expect(mention(suggest(vault, { types: ['mention'], from: [from] }), from, 'Areas/Search/Design/学习方案.md')?.around).toEqual(['先读目标设计说明，再看', '学习方案', '。']);
+    } finally {
+      vault.close();
+    }
+  });
+
   it('keeps an id per kind and pair, and never suggests a dismissed one again', async () => {
     const owner = await Vault.open(root, { owner: true });
     const stranger = await Vault.open(root, {});
@@ -95,6 +132,55 @@ describe('suggest', () => {
       expect(suggest(owner, { dismissed: true }).some((item) => item.id === first.id)).toBe(true);
       // Other suggestions to the same note stay.
       expect(mention(suggest(owner), 'Areas/Search/Design/notes.md', 'Areas/Search/Design/目标设计说明.md')).toBeDefined();
+    } finally {
+      owner.close();
+      stranger.close();
+    }
+  });
+
+  it('leaves out a suggestion whose note changed since, rather than linking in the wrong place', async () => {
+    const owner = await Vault.open(root, { owner: true });
+    try {
+      const target = 'Areas/Search/Design/目标设计说明.md';
+      const near = mention(suggest(owner), 'Areas/Search/Design/notes.md', target)!;
+      const far = mention(suggest(owner), 'Elsewhere/essay.md', target)!;
+      // One note is written to after the suggestions were made: its words have moved.
+      write('Areas/Search/Design/notes.md', '# Notes\n\n新加了一段话。先读目标设计说明，再动手。\n');
+      const { changes, outdated } = prepare(owner, [near, far]);
+      expect(outdated.map((item) => item.id)).toEqual([near.id]);
+      expect(changes.map((change) => change.path)).toEqual(['Elsewhere/essay.md']);
+      expect(changes[0]!.content).toContain('[[');
+      // A note that is gone cannot take its link either.
+      rmSync(path.join(root, 'Elsewhere/essay.md'));
+      expect(prepare(owner, [far]).outdated.map((item) => item.id)).toEqual([far.id]);
+    } finally {
+      owner.close();
+    }
+  });
+
+  it('lists what was dismissed, the latest first, and brings some or all of it back', async () => {
+    const owner = await Vault.open(root, { owner: true });
+    const stranger = await Vault.open(root, {});
+    try {
+      const target = 'Areas/Search/Design/目标设计说明.md';
+      const first = mention(suggest(owner), 'Elsewhere/essay.md', target)!;
+      const second = mention(suggest(owner), 'Areas/Search/Design/notes.md', target)!;
+      dismiss(owner, [first]);
+      dismiss(owner, [second]);
+      // A line broken by hand is kept through every rewrite.
+      writeFileSync(path.join(root, '.noto/dismissed.jsonl'), `${readFileSync(path.join(root, '.noto/dismissed.jsonl'), 'utf8')}{ broken\n`);
+      expect(dismissals(owner).map((item) => item.id)).toEqual([second.id, first.id]);
+      expect(dismissals(owner)[0]).toMatchObject({ type: 'mention', from: 'Areas/Search/Design/notes.md', to: target });
+      expect(() => dismissals(stranger)).toThrow(AccessError);
+      expect(() => undismiss(stranger, 'all')).toThrow(AccessError);
+
+      expect(undismiss(owner, [first.id])).toBe(1);
+      expect(suggest(owner).some((item) => item.id === first.id)).toBe(true);
+      expect(suggest(owner).some((item) => item.id === second.id)).toBe(false);
+      expect(undismiss(owner, [first.id])).toBe(0);
+      expect(undismiss(owner, 'all')).toBe(1);
+      expect(dismissals(owner)).toEqual([]);
+      expect(readFileSync(path.join(root, '.noto/dismissed.jsonl'), 'utf8')).toBe('{ broken\n');
     } finally {
       owner.close();
       stranger.close();

@@ -4,14 +4,14 @@
  */
 
 import { createHash } from 'node:crypto';
-import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
+import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { loadAccess, type AccessPolicy, type Principal, type Sensitivity, type Verb } from './access.js';
 import { loadConfig, type BrainConfig, type Kind, type Source } from './config.js';
 import { addRelationLines, appendEntry, datedPath, relationWord } from './edit.js';
-import { recordEvents, newSession, type EventVerb } from './events.js';
+import { ACTOR_NAME, EventLog, newSession, type EventVerb } from './events.js';
 import { splitFrontmatter } from './markdown.js';
-import { acceptProposal, createProposal, findRepo, listProposals, proposalDiff, rejectProposal, type AcceptResult, type FileChange, type GitRepo, type Proposal } from './git.js';
+import { acceptProposal, createProposal, findRepo, listProposals, proposalDiff, proposalFile, rejectProposal, type AcceptResult, type FileChange, type GitRepo, type Proposal } from './git.js';
 import { refresh, type IndexContext, type RefreshStats } from './indexer.js';
 import { decay } from './memory.js';
 import { isMarkdown, nameOf, normalise } from './paths.js';
@@ -84,11 +84,35 @@ export interface OpenOptions {
   readonly key?: string;
   /** Groups this process's events into one sitting. */
   readonly session?: string;
+  /**
+   * Who the events name while acting as the owner on someone's behalf: an
+   * agent that runs the command line (`agentActor`). A principal with a key
+   * is always named by its key, whatever this says.
+   */
+  readonly actor?: string;
   /** Refresh the index on open (default true). */
   readonly refresh?: boolean;
+  /**
+   * Empty the index first, so it is built again from the notes, the event
+   * logs and git. It is emptied in place, in one transaction, so another
+   * process that has it open (an agent's server) sees the old index or the
+   * new; only an index that cannot be opened at all is deleted and made anew.
+   */
+  readonly rebuild?: boolean;
 }
 
 const sha = (data: string | Buffer): string => createHash('sha256').update(data).digest('hex');
+
+function rebuiltStore(file: string): Store {
+  try {
+    const store = Store.open(file);
+    store.reset();
+    return store;
+  } catch {
+    for (const part of [file, `${file}-wal`, `${file}-shm`]) rmSync(part, { force: true });
+    return Store.open(file);
+  }
+}
 const iso = (ms: number | null): string | null => (ms === null ? null : new Date(ms).toISOString());
 
 interface RawNoteRow {
@@ -105,6 +129,8 @@ function toNote(row: RawNoteRow): NoteRow {
 
 export class Vault {
   readonly session: string;
+  private actorName: string;
+  private readonly events: EventLog;
   private readonly repoCache: { value: GitRepo | null | undefined } = { value: undefined };
 
   private constructor(
@@ -116,8 +142,27 @@ export class Vault {
     readonly principal: Principal,
     private readonly fingerprint: string,
     session: string | undefined,
+    actor: string | undefined,
   ) {
     this.session = session ?? newSession();
+    this.actorName = principal.name;
+    if (actor) this.actAs(actor);
+    this.events = new EventLog(root);
+  }
+
+  /** Who this vault's events name: the principal, or for the owner, whoever acts for them. */
+  get actor(): string {
+    return this.actorName;
+  }
+
+  /**
+   * Record what follows under `name`, the agent acting as the owner: one
+   * that runs the command line, or a server started with `--owner`, which
+   * learns its client's name when it connects. A principal with a key keeps
+   * its own name, and a name that is not one is ignored.
+   */
+  actAs(name: string): void {
+    if (this.principal.owner && ACTOR_NAME.test(name)) this.actorName = name;
   }
 
   /** What the index was built under: schema, config, access policy and scripts. */
@@ -139,8 +184,8 @@ export class Vault {
     const scripts = await loadScripts(absolute);
     const principal = options.owner ? access.owner : access.principalFor(options.key);
     const fingerprint = Vault.fingerprint(absolute);
-    const store = Store.open(indexPath(absolute));
-    const vault = new Vault(absolute, store, config, access, scripts, principal, fingerprint, options.session);
+    const store = options.rebuild ? rebuiltStore(indexPath(absolute)) : Store.open(indexPath(absolute));
+    const vault = new Vault(absolute, store, config, access, scripts, principal, fingerprint, options.session, options.actor);
     if (options.refresh !== false) vault.refresh();
     return vault;
   }
@@ -150,6 +195,7 @@ export class Vault {
   close(): void {
     if (this.closed) return;
     this.closed = true;
+    this.events.flush();
     this.store.close();
   }
 
@@ -183,11 +229,11 @@ export class Vault {
     return this.principal.canSee(note.path, note.sensitivity);
   }
 
-  /** Record events as this principal, in this sitting. */
+  /** Record what one call did to these notes, as this vault's actor, in this sitting. */
   recordEvent(verb: EventVerb, paths: readonly string[], extra: { query?: string; from?: string } = {}): void {
     if (paths.length === 0) return;
     try {
-      recordEvents(this.root, paths.map((rel) => ({ actor: this.principal.name, verb, path: rel, session: this.session, ...extra })));
+      this.events.record(paths.map((rel) => ({ actor: this.actor, verb, path: rel, session: this.session, ...extra })));
     } catch {
       // A vault on a read-only disk still answers; it only forgets that it was asked.
     }
@@ -489,7 +535,8 @@ export class Vault {
     const rel = this.guardPath(options.to ?? datedPath(this.config.append.path, now));
     if (!this.principal.canAppend(rel)) throw new AccessError(`${this.principal.name} may not append to ${rel}.`);
     const stamp = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
-    const who = this.principal.owner ? '' : ` · ${this.principal.name}`;
+    // An entry an agent made says so, whether it came with a key or ran the command line for the person.
+    const who = this.actor === 'owner' ? '' : ` · ${this.actor}`;
     const entry = `### ${stamp}${who}\n\n${text.trim()}`;
     const current = this.textOf(rel);
     this.writeFile(rel, appendEntry(current, entry, nameOf(rel).replace(/[_-]+/g, ' ')));
@@ -585,10 +632,42 @@ export class Vault {
     return proposalDiff(this.requireRepo(), id);
   }
 
+  /**
+   * One file of a proposal at both ends, for showing it side by side: as it
+   * was when the proposal was made, and as proposed. Null where the file did
+   * not exist, or would not.
+   */
+  proposalFile(id: string, rel: string): { base: string | null; proposed: string | null } {
+    const proposal = this.proposals().find((item) => item.id === id);
+    if (!proposal) throw new Error(`There is no proposal ${id}${this.principal.owner ? '' : ` by ${this.principal.name}`}.`);
+    if (!proposal.files.some((file) => file.path === rel)) throw new Error(`The proposal ${id} does not change ${rel}.`);
+    return proposalFile(this.requireRepo(), id, rel);
+  }
+
+  /** Who has read the folder's notes, how often and when last: the owner and each agent. The owner's to ask. */
+  readers(): { actor: string; count: number; last: string }[] {
+    if (!this.principal.owner) throw new AccessError(`${this.principal.name} may not see who reads this vault.`);
+    return (this.store.db.prepare("SELECT actor, COUNT(*) AS count, MAX(time) AS last FROM events WHERE verb IN ('open', 'read', 'recall', 'cite') GROUP BY actor ORDER BY last DESC").all() as
+      { actor: string; count: number; last: number }[]).map((row) => ({ actor: row.actor, count: row.count, last: new Date(row.last).toISOString() }));
+  }
+
+  /** Whether the vault is in a git repository, which proposals need. */
+  inGit(): boolean {
+    return this.repo !== null;
+  }
+
   accept(id: string): AcceptResult {
     if (!this.principal.owner) throw new AccessError('Only the owner accepts proposals.');
     const repo = this.requireRepo();
     const files = this.proposals().find((proposal) => proposal.id === id)?.files.map((file) => file.path) ?? [];
+    // A proposal is a ref anyone with git can write, so what it may touch is
+    // checked as it lands, not only when made: never the folder's settings
+    // (.noto/access.yaml would let an agent grant itself more), its scripts,
+    // or anything under a dot folder or node_modules.
+    const settled = files.filter((rel) => rel.split('/').some((part) => part.startsWith('.') || part === 'node_modules'));
+    if (settled.length > 0) {
+      throw new AccessError(`A proposal may not change ${settled.join(', ')}: settings and dot folders are changed by hand.`);
+    }
     const result = acceptProposal(repo, this.root, id);
     this.recordEvent(result.conflicts.length === 0 ? 'accept' : 'propose', files);
     if (result.applied.length > 0) this.refresh({ paths: result.applied });

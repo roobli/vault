@@ -1,20 +1,24 @@
 /**
  * `noto-vault`: the verbs from a shell, for the person, for scripts, and for
  * agents that have a shell. The CLI acts as the owner unless
- * `NOTO_VAULT_KEY` names another principal.
+ * `NOTO_VAULT_KEY` names another principal; when an agent runs it for the
+ * person, what it does is recorded under the agent's name (`agentActor`), so
+ * an agent's recalls and proposals are never counted as the person's.
  */
 
-import { randomBytes } from 'node:crypto';
-import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { createInterface } from 'node:readline/promises';
 import { parseArgs } from 'node:util';
-import { accessPath, keyHash } from './access.js';
-import { configPath } from './config.js';
-import { formatRead, formatRecall, formatSearch, formatSuggestion, formatSuggestions, plainEmphasis, terminalEmphasis } from './format.js';
+import { about } from './about.js';
+import { agentActor, recordEvents, type EventVerb } from './events.js';
+import { isMarkdown } from './paths.js';
+import { initVault } from './init.js';
+import { formatAbout, formatRead, formatRecall, formatSearch, formatSuggestion, formatSuggestions, plainEmphasis, terminalEmphasis } from './format.js';
 import { serve } from './mcp.js';
 import { recall } from './recall.js';
 import { dismiss, suggest, toChanges, type Suggestion, type SuggestionType } from './suggest.js';
+import { addAgent, revokeAgent } from './policy.js';
 import { AccessError, ConflictError, Vault } from './vault.js';
 import { parseYaml } from './yaml.js';
 
@@ -27,6 +31,7 @@ const HELP = `noto-vault: a vault of Markdown notes as memory
   noto-vault search <query...>          full text  [--limit n] [--kind k] [--folder dir]
   noto-vault read <note>                a note with its links, hash and heat  [--meta]
   noto-vault backlinks <note>           what links here
+  noto-vault about <note>               everything the vault knows about a note  [--limit n per list]
   noto-vault where <id or name>         where a project or note lives now
   noto-vault visit <note> [--from n]    record that you opened a note
   noto-vault graph [--out file]         nodes and edges as JSON  [--types a,b] [--min w]
@@ -40,11 +45,17 @@ const HELP = `noto-vault: a vault of Markdown notes as memory
   noto-vault link <from> <to>           a typed relation line  [--rel related]
   noto-vault supersede <old> <new>      mark old as superseded by new
   noto-vault key add <principal>        make a key for an agent and add it to .noto/access.yaml
-  noto-vault eval <cases.yaml>          how well recall finds what it should  [--k 5] [--search]
+  noto-vault key revoke <principal>     take an agent's keys back
+  noto-vault eval <cases.yaml>          how well recall finds what it should  [--k 5] [--search]   (records nothing)
+  noto-vault record <verb> <path...>    say a note was read or written outside Noto: open, read, cite, write, append
+  noto-vault record --hook              the same, from an agent's tool hook on stdin (Claude Code's PostToolUse)
   noto-vault mcp [--owner]              serve the vault over MCP on stdio
 
   --root <dir>   the vault (default: the nearest folder above with .noto/)
-  --json         machine-readable output`;
+  --json         machine-readable output
+
+  Who is recorded: the person, unless NOTO_VAULT_KEY names an agent, NOTO_ACTOR
+  names one, or an agent says so in its environment (Claude Code, Codex).`;
 
 function findRoot(start: string): string | null {
   let at = path.resolve(start);
@@ -56,57 +67,6 @@ function findRoot(start: string): string | null {
   }
 }
 
-const BRAIN_TEMPLATE = `# How this vault's notes map onto the framework. Every key is optional.
-# See the design: kinds by when a note is true, two dials (forgetting, laziness).
-
-# Globs kept out of the index, beyond dot-folders and node_modules.
-ignore: []
-
-kinds:
-  # Frontmatter keys read for the kind, first match wins, and their values.
-  fields: [kind, type]
-  map: {log: log, moc: card, card: card, decision: decision}
-  # These file names are cards when they carry an id or moc: true.
-  cards: [00_索引.md, index.md, README.md]
-  dated_names_are_logs: true
-
-# Extra relation words, at the start of a list item followed by links.
-relations: {}
-
-# Forgetting: half-lives in days.
-half_life_days:
-  heat_by_kind: {log: 14, note: 30, card: 90, decision: 180}
-  visit: 60
-  co_change: 120
-
-co_change:
-  max_notes: 12
-
-# Laziness: how much to hand the person, and how much recall returns.
-budget:
-  daily_reviews: 10
-  recall_chars: 6000
-
-append:
-  path: "inbox/{yyyy}-{mm}-{dd}.md"
-`;
-
-const ACCESS_TEMPLATE = `# Who may read and write what. The owner (you, at this CLI) may do anything.
-# A sealed note is never given to anyone but the owner. .noto/ and .git/ are
-# never writable by anyone else.
-
-sensitivity:
-  default: open
-  private: []
-  sealed: []
-
-principals:
-  # An agent without a key: reads what is open, writes nothing.
-  default:
-    read: ["**"]
-    max_sensitivity: open
-    verbs: [read, search, recall]
-`;
 
 async function main(argv: string[]): Promise<number> {
   const { values, positionals } = parseArgs({
@@ -118,6 +78,7 @@ async function main(argv: string[]): Promise<number> {
       folder: { type: 'string' }, from: { type: 'string' }, budget: { type: 'string' }, out: { type: 'string' }, types: { type: 'string' },
       min: { type: 'string' }, propose: { type: 'boolean' }, review: { type: 'boolean' }, dismiss: { type: 'boolean' }, message: { type: 'string' }, to: { type: 'string' }, base: { type: 'string' },
       rel: { type: 'string' }, owner: { type: 'boolean' }, k: { type: 'string' }, search: { type: 'boolean' }, meta: { type: 'boolean' },
+      hook: { type: 'boolean' },
       help: { type: 'boolean', short: 'h' },
     },
   });
@@ -133,15 +94,13 @@ async function main(argv: string[]): Promise<number> {
 
   if (command === 'init') {
     const root = path.resolve(typeof values.root === 'string' ? values.root : process.cwd());
-    mkdirSync(path.join(root, '.noto', 'scripts'), { recursive: true });
-    const made: string[] = [];
-    if (!existsSync(configPath(root))) { writeFileSync(configPath(root), BRAIN_TEMPLATE); made.push('.noto/brain.yaml'); }
-    if (!existsSync(accessPath(root))) { writeFileSync(accessPath(root), ACCESS_TEMPLATE); made.push('.noto/access.yaml'); }
-    const ignore = path.join(root, '.noto', '.gitignore');
-    if (!existsSync(ignore)) { writeFileSync(ignore, '# The index is a cache: delete it at any time.\nindex.sqlite*\n'); made.push('.noto/.gitignore'); }
+    const made = initVault(root);
     console.log(made.length > 0 ? `Made ${made.join(', ')}. Run noto-vault index next.` : '.noto/ is already set up.');
     return 0;
   }
+
+  // Before any vault is opened: it runs after every edit an agent makes, and needs no index.
+  if (command === 'record') return record(rest, values.hook === true, typeof values.root === 'string' ? path.resolve(values.root) : null);
 
   const root = typeof values.root === 'string' ? path.resolve(values.root) : process.env.NOTO_VAULT_ROOT ? path.resolve(process.env.NOTO_VAULT_ROOT) : findRoot(process.cwd());
   if (!root) {
@@ -150,53 +109,41 @@ async function main(argv: string[]): Promise<number> {
   }
 
   if (command === 'key') {
-    if (rest[0] !== 'add' || !rest[1] || !/^[A-Za-z0-9._-]+$/.test(rest[1])) {
-      console.error('Usage: noto-vault key add <principal>   (letters, digits, . _ -)');
+    const name = rest[1];
+    if (!['add', 'revoke'].includes(rest[0] ?? '') || !name) {
+      console.error('Usage: noto-vault key add <principal>   (letters, digits, . _ -)\n       noto-vault key revoke <principal>');
       return 2;
     }
-    const name = rest[1];
-    const key = randomBytes(24).toString('base64url');
-    const file = accessPath(root);
-    const text = existsSync(file) ? readFileSync(file, 'utf8') : ACCESS_TEMPLATE;
-    const parsed = parseYaml(text) as { principals?: Record<string, unknown> } | null;
-    if (parsed?.principals && name in parsed.principals) {
-      console.log(`${name} is already in .noto/access.yaml. Add this to its keys list:\n  ${keyHash(key)}\n\nThe key, shown once:\n  ${key}`);
+    if (rest[0] === 'revoke') {
+      const changed = revokeAgent(root, name);
+      console.log(changed ? `Took ${name}'s keys back; a running server stops answering it on its next request.` : `.noto/access.yaml names no ${name}.`);
+      return changed ? 0 : 1;
+    }
+    try {
+      // What an agent added here may do: read private notes too, and propose changes.
+      const { key } = addAgent(root, { name, reads: 'private', may: 'propose' });
+      console.log(`Added ${name} to .noto/access.yaml. The key, shown once; give it to the agent as NOTO_VAULT_KEY:\n  ${key}`);
       return 0;
+    } catch (error) {
+      console.error((error as Error).message);
+      return 1;
     }
-    const block = [
-      `  ${name}:`,
-      `    keys: [${keyHash(key)}]`,
-      '    read: ["**"]',
-      '    max_sensitivity: private',
-      '    # Paths it may append to and write directly; everything else it proposes.',
-      '    append: []',
-      '    write: []',
-      '    verbs: [read, search, recall, append, propose]',
-      '',
-    ].join('\n');
-    if (!existsSync(file)) writeFileSync(file, ACCESS_TEMPLATE);
-    const current = readFileSync(file, 'utf8');
-    if (!/^principals:\s*$/m.test(current)) {
-      appendFileSync(file, `${current.endsWith('\n') ? '' : '\n'}\nprincipals:\n${block}`);
-    } else {
-      // At the end of the principals section: before the next key that starts a line.
-      const lines = current.split('\n');
-      const start = lines.findIndex((line) => /^principals:\s*$/.test(line));
-      let end = lines.length;
-      for (let at = start + 1; at < lines.length; at += 1) {
-        if (/^[^\s#]/.test(lines[at]!)) { end = at; break; }
-      }
-      while (end > start + 1 && lines[end - 1]!.trim() === '') end -= 1;
-      lines.splice(end, 0, ...block.replace(/\n$/, '').split('\n'));
-      writeFileSync(file, lines.join('\n'));
-    }
-    console.log(`Added ${name} to .noto/access.yaml. The key, shown once; give it to the agent as NOTO_VAULT_KEY:\n  ${key}`);
-    return 0;
+  }
+
+  // A server answers for a folder that keeps memory and never starts keeping it: opening the vault
+  // would make .noto anew under no policy, which gives an agent without a key every open note.
+  if (command === 'mcp' && !existsSync(path.join(root, '.noto'))) {
+    console.error(`${root} does not keep memory (it has no .noto folder), so there is nothing to serve. Keep memory for it in Noto, or run noto-vault init there.`);
+    return 2;
   }
 
   const key = process.env.NOTO_VAULT_KEY;
   const owner = command === 'mcp' ? values.owner === true : key === undefined || key === '';
-  const vault = await Vault.open(root, { owner, ...(owner || !key ? {} : { key }), ...(process.env.NOTO_SESSION ? { session: process.env.NOTO_SESSION } : {}), refresh: command !== 'visit' });
+  // A server is the agent's own, under its key or as the owner it was started as; the command line may be an agent's hands.
+  const acting = owner && command !== 'mcp' ? agentActor() : null;
+  const session = process.env.NOTO_SESSION || acting?.session;
+  const opening = { owner, ...(owner || !key ? {} : { key }), ...(session ? { session } : {}), ...(acting ? { actor: acting.actor } : {}) };
+  const vault = await Vault.open(root, { ...opening, refresh: command !== 'visit' });
   try {
     switch (command) {
       case 'index': {
@@ -231,6 +178,15 @@ async function main(argv: string[]): Promise<number> {
         if (!words) throw new UsageError('read needs a note.');
         const note = vault.read(words);
         print(note, () => formatRead(note, values.meta !== true));
+        return 0;
+      }
+      case 'about': {
+        if (!words) throw new UsageError('about needs a note.');
+        // Anyone else gets about's own refusal, which says the same for a hidden note as for a missing one.
+        if (vault.principal.owner && !vault.find(words)) throw new UsageError(`No note answers to "${words}".`);
+        const limit = number(values.limit);
+        const info = about(vault, words, limit !== undefined ? { limit } : {});
+        print(info, () => formatAbout(info));
         return 0;
       }
       case 'backlinks': {
@@ -356,7 +312,7 @@ async function main(argv: string[]): Promise<number> {
       }
       case 'mcp':
         await serve(vault, {
-          reopen: () => Vault.open(root, { owner, ...(owner || !key ? {} : { key }), ...(process.env.NOTO_SESSION ? { session: process.env.NOTO_SESSION } : {}) }),
+          reopen: () => Vault.open(root, opening),
         });
         return 0;
       default:
@@ -434,7 +390,8 @@ function evaluate(vault: Vault, file: string, k: number, bySearch: boolean) {
   for (const raw of cases as unknown as EvalCase[]) {
     if (!raw || typeof raw.query !== 'string' || !Array.isArray(raw.expect)) continue;
     const expected = raw.expect.map((ref) => vault.find(String(ref))?.path ?? String(ref));
-    const ranked = bySearch ? vault.search(raw.query, { limit: k }).map((hit) => hit.path) : recall(vault, raw.query, { limit: k, budget: 1_000_000 }).items.map((item) => item.path);
+    // A measurement, not a use: nothing it finds is recorded as recalled.
+    const ranked = bySearch ? vault.search(raw.query, { limit: k }).map((hit) => hit.path) : recall(vault, raw.query, { limit: k, budget: 1_000_000, record: false }).items.map((item) => item.path);
     const top = ranked.slice(0, k);
     const found = expected.filter((rel) => top.includes(rel));
     const first = top.findIndex((rel) => expected.includes(rel));
@@ -449,6 +406,86 @@ function evaluate(vault: Vault, file: string, k: number, bySearch: boolean) {
     ...rows.filter((row) => !row.hit).map((row) => `  miss: ${row.query}\n    got: ${row.top.slice(0, 3).join(' | ')}`),
   ].join('\n');
   return { cases: rows.length, k, hitRate, recall: meanRecall, mrr, rows, text };
+}
+
+/** What a person or an agent may say happened to a note outside Noto; the rest are the vault's own to record. */
+const RECORDABLE: readonly EventVerb[] = ['open', 'read', 'cite', 'write', 'append'];
+
+/** What an agent's tool did, by its name: Claude Code's, and any tool named the same way. */
+function hookVerb(tool: unknown): EventVerb | null {
+  if (typeof tool !== 'string') return null;
+  if (/^(Read|NotebookRead)$/.test(tool)) return 'read';
+  if (/^(Write|Edit|MultiEdit|NotebookEdit)$/.test(tool)) return 'write';
+  return null;
+}
+
+async function readStdin(): Promise<string> {
+  const chunks: Buffer[] = [];
+  for await (const chunk of process.stdin) chunks.push(chunk as Buffer);
+  return Buffer.concat(chunks).toString('utf8');
+}
+
+/**
+ * Record that notes were read or written outside Noto: by the person in
+ * another editor, or by an agent that edits files itself (a hook after each
+ * of its edits). Each path goes to the vault it is in, the nearest folder
+ * above it with `.noto/`; a path in no such folder, or not a note, is passed
+ * over. Opens no index, so a hook that runs after every edit costs a process
+ * start and one appended line. From a hook it never fails the agent's step.
+ */
+async function record(args: readonly string[], hook: boolean, root: string | null): Promise<number> {
+  if (hook) {
+    // Whatever the payload, a hook's step goes on: every failure here is a line not recorded.
+    try { await recordFromHook(root); } catch { /* nothing recorded */ }
+    return 0;
+  }
+  const verb = RECORDABLE.includes(args[0] as EventVerb) ? args[0] as EventVerb : null;
+  if (!verb || args.length < 2) throw new UsageError(`Usage: noto-vault record <${RECORDABLE.join('|')}> <path...>`);
+  const acting = agentActor();
+  const recorded = recordNotes(args.slice(1).map((item) => path.resolve(item)), verb, acting?.actor ?? 'owner', process.env.NOTO_SESSION || acting?.session, root);
+  if (recorded === 0) console.error('None of these is a note in a folder that keeps memory, so nothing was recorded.');
+  return recorded > 0 ? 0 : 1;
+}
+
+/**
+ * A tool hook's payload on stdin. Only an agent's hook sends one, so what it
+ * records is never the person's: the agent its environment names, or
+ * `claude-code`, whose payload this is, when its environment names none.
+ */
+async function recordFromHook(root: string | null): Promise<void> {
+  // Run by hand at a terminal, there is nothing on stdin to wait for.
+  if (process.stdin.isTTY) return;
+  const payload: unknown = JSON.parse(await readStdin());
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return;
+  const fields = payload as Record<string, unknown>;
+  const verb = hookVerb(fields.tool_name);
+  const input = fields.tool_input && typeof fields.tool_input === 'object' ? fields.tool_input as Record<string, unknown> : {};
+  const file = [input.file_path, input.notebook_path, input.path].find((value): value is string => typeof value === 'string' && value !== '');
+  if (!verb || !file) return;
+  const cwd = typeof fields.cwd === 'string' ? fields.cwd : process.cwd();
+  const acting = agentActor();
+  const own = typeof fields.session_id === 'string' && /^[A-Za-z0-9._:-]{1,80}$/.test(fields.session_id) ? fields.session_id : undefined;
+  recordNotes([path.resolve(cwd, file)], verb, acting?.actor ?? 'claude-code', process.env.NOTO_SESSION || own || acting?.session, root);
+}
+
+/** Append one line per vault for the notes among `files`; how many were recorded. */
+function recordNotes(files: readonly string[], verb: EventVerb, actor: string, session: string | undefined, root: string | null): number {
+  let recorded = 0;
+  const byVault = new Map<string, string[]>();
+  for (const file of files) {
+    const vault = root ?? findRoot(path.dirname(file));
+    if (!vault) continue;
+    const rel = path.relative(vault, file);
+    if (!rel || rel.startsWith('..') || path.isAbsolute(rel) || !isMarkdown(rel)) continue;
+    const parts = rel.split(path.sep);
+    // The vault's own files and hidden folders are not notes.
+    if (parts.some((part) => part.startsWith('.'))) continue;
+    byVault.set(vault, [...(byVault.get(vault) ?? []), parts.join('/')]);
+  }
+  for (const [vault, rels] of byVault) {
+    if (recordEvents(vault, rels.map((rel) => ({ actor, verb, path: rel, ...(session ? { session } : {}) })))) recorded += rels.length;
+  }
+  return recorded;
 }
 
 export async function run(argv: string[]): Promise<void> {

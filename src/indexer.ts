@@ -9,13 +9,13 @@
  * of that brought something new, heat and edges are recomputed.
  */
 
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { closeSync, existsSync, lstatSync, openSync, readdirSync, readFileSync, readSync, statSync } from 'node:fs';
 import path from 'node:path';
 import type { AccessPolicy, Sensitivity } from './access.js';
 import { SENSITIVITIES } from './access.js';
 import { KINDS, SOURCES, type BrainConfig, type Kind, type Source } from './config.js';
-import { eventsDir } from './events.js';
+import { EVENT_LINE_MAX, eventsDir } from './events.js';
 import { commitsSince, findRepo, headCommit, isAncestor, type GitRepo } from './git.js';
 import { dateFromName, parseNote, stringList, type Link } from './markdown.js';
 import { recomputeWeights } from './memory.js';
@@ -92,15 +92,29 @@ const sha = (data: Buffer | string): string => createHash('sha256').update(data)
 const higher = (left: Sensitivity, right: Sensitivity | undefined | null): Sensitivity =>
   right && SENSITIVITIES.indexOf(right) > SENSITIVITIES.indexOf(left) ? right : left;
 
-function kindOf(rel: string, fm: Record<string, unknown>, config: BrainConfig): Kind {
+/**
+ * Where a value the index holds came from: the note's frontmatter, a vault
+ * script, a folder rule in `access.yaml`, a rule in `brain.yaml`, or nothing
+ * that said anything.
+ */
+export type Origin = 'note' | 'script' | 'folder' | 'config' | 'default';
+
+/** The origin of each derived field, as `notes.origins` keeps it. */
+export interface Origins {
+  readonly kind: Origin;
+  readonly known: Origin;
+  readonly sensitivity: Origin;
+}
+
+function kindOf(rel: string, fm: Record<string, unknown>, config: BrainConfig): { kind: Kind; from: Origin } {
   for (const field of config.kinds.fields) {
     const value = fm[field];
-    if (typeof value === 'string' && config.kinds.map[value]) return config.kinds.map[value]!;
+    if (typeof value === 'string' && config.kinds.map[value]) return { kind: config.kinds.map[value]!, from: 'config' };
   }
   const isCardName = config.kinds.cards.includes(baseOf(rel));
-  if (fm.moc === true || (isCardName && (fm.id !== undefined || fm.moc !== undefined))) return 'card';
-  if (config.kinds.datedNamesAreLogs && dateFromName(rel)) return 'log';
-  return 'note';
+  if (fm.moc === true || (isCardName && (fm.id !== undefined || fm.moc !== undefined))) return { kind: 'card', from: 'config' };
+  if (config.kinds.datedNamesAreLogs && dateFromName(rel)) return { kind: 'log', from: 'config' };
+  return { kind: 'note', from: 'default' };
 }
 
 /** How long a note is, as a reader counts: each CJK character, and each other word. */
@@ -122,6 +136,7 @@ interface Built {
   readonly row: {
     path: string; hash: string; title: string; id: string | null; kind: Kind; source: Source | null; sensitivity: Sensitivity;
     status: string | null; date: string | null; chars: number; frontmatter: string; headings: string; tags: string; aliases: string;
+    origins: string;
   };
   readonly links: readonly (Link & { readonly derived?: boolean })[];
   readonly aliases: readonly string[];
@@ -136,7 +151,8 @@ function buildNote(ix: IndexContext, rel: string, text: string, hash: string): B
   let searchText = parsed.body;
   for (const script of ix.scripts.scripts) if (script.text) searchText = script.text({ ...scriptNote, body: searchText });
 
-  const kind = derived.kind && KINDS.includes(derived.kind) ? derived.kind : kindOf(rel, fm, ix.config);
+  const ruled = derived.kind && KINDS.includes(derived.kind) ? { kind: derived.kind, from: 'script' as const } : kindOf(rel, fm, ix.config);
+  const kind = ruled.kind;
   // How a note is known is written as `known:`; `source:` in most vaults already
   // says where a note came from (a URL, a book), so it is never read for this.
   // What the note says wins over what a script infers: only a person writes `lived`.
@@ -145,6 +161,14 @@ function buildNote(ix: IndexContext, rel: string, text: string, hash: string): B
   // The folder sets a floor; a script or the note itself may only raise it.
   const fmSensitivity = typeof fm.sensitivity === 'string' && (SENSITIVITIES as readonly string[]).includes(fm.sensitivity) ? fm.sensitivity as Sensitivity : null;
   const sensitivity = higher(higher(ix.access.sensitivityOf(rel), derived.sensitivity), fmSensitivity);
+  // Kept now, so that showing where a value came from never runs the scripts again.
+  // When layers agree, the one closest to the note is named: the note, then a script, then the folder.
+  const origins: Origins = {
+    kind: ruled.from,
+    known: fmSource ? 'note' : derived.source !== undefined ? 'script' : 'default',
+    sensitivity: sensitivity === fmSensitivity ? 'note' : sensitivity === derived.sensitivity ? 'script'
+      : ix.access.sensitivityRule(rel) !== null ? 'folder' : 'default',
+  };
   const id = typeof fm.id === 'string' || typeof fm.id === 'number' ? String(fm.id).trim() || null : null;
   const status = derived.status !== undefined ? derived.status : typeof fm.status === 'string' ? fm.status : null;
   const fmDate = typeof fm.date === 'string' ? fm.date : typeof fm.created === 'string' ? fm.created : null;
@@ -163,6 +187,7 @@ function buildNote(ix: IndexContext, rel: string, text: string, hash: string): B
       headings: JSON.stringify(parsed.headings),
       tags: JSON.stringify(tags),
       aliases: JSON.stringify(aliases),
+      origins: JSON.stringify(origins),
     },
     links,
     aliases,
@@ -172,6 +197,15 @@ function buildNote(ix: IndexContext, rel: string, text: string, hash: string): B
       body: indexText(searchText),
     },
   };
+}
+
+/**
+ * What a note is called and who may see it, which is all that a table of
+ * names built from the index depends on. Its body can change without this.
+ */
+function nameKey(row: { title: string; kind: string; source: string | null; sensitivity: string; aliases: string; frontmatter: string }): string {
+  const fm = JSON.parse(row.frontmatter) as Record<string, unknown>;
+  return JSON.stringify([row.title, row.kind, row.source, row.sensitivity, row.aliases, fm.id ?? null, fm.aliases ?? null]);
 }
 
 function readText(file: string): { text: string; hash: string } | null {
@@ -278,16 +312,20 @@ export function refresh(ix: IndexContext, options: { full?: boolean; paths?: rea
   const deleteFts = db.prepare('DELETE FROM fts WHERE rowid = ?');
   const deleteLinks = db.prepare('DELETE FROM links WHERE src = ?');
   const deleteAliases = db.prepare("DELETE FROM aliases WHERE path = ? AND origin IN ('id', 'alias')");
-  const upsertNote = db.prepare(`INSERT INTO notes(path, hash, title, id, kind, source, sensitivity, status, date, chars, frontmatter, headings, tags, aliases)
-    VALUES (@path, @hash, @title, @id, @kind, @source, @sensitivity, @status, @date, @chars, @frontmatter, @headings, @tags, @aliases)
+  const upsertNote = db.prepare(`INSERT INTO notes(path, hash, title, id, kind, source, sensitivity, status, date, chars, frontmatter, headings, tags, aliases, origins)
+    VALUES (@path, @hash, @title, @id, @kind, @source, @sensitivity, @status, @date, @chars, @frontmatter, @headings, @tags, @aliases, @origins)
     ON CONFLICT(path) DO UPDATE SET hash = excluded.hash, title = excluded.title, id = excluded.id, kind = excluded.kind, source = excluded.source,
       sensitivity = excluded.sensitivity, status = excluded.status, date = excluded.date, chars = excluded.chars, frontmatter = excluded.frontmatter,
-      headings = excluded.headings, tags = excluded.tags, aliases = excluded.aliases
+      headings = excluded.headings, tags = excluded.tags, aliases = excluded.aliases, origins = excluded.origins
     RETURNING nid`);
   const insertFts = db.prepare('INSERT INTO fts(rowid, title, path, body) VALUES (?, ?, ?, ?)');
   const insertLink = db.prepare('INSERT INTO links(src, kind, target, anchor, label, relation, line, start, end) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)');
   const insertAlias = db.prepare('INSERT INTO aliases(key, path, origin) VALUES (?, ?, ?)');
   const insertRename = db.prepare('INSERT INTO renames(old, new, time, origin) VALUES (?, ?, ?, ?)');
+  const priorNames = db.prepare('SELECT title, kind, source, sensitivity, aliases, frontmatter FROM notes WHERE path = ?');
+  // A new random token per change, not a time or a counter: two refreshes in one millisecond
+  // still differ, and an index rebuilt from nothing never repeats what an open vault has seen.
+  const markNames = db.prepare("INSERT INTO meta(key, value) VALUES ('names', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value");
 
   const changedNotes = new Set<string>();
   const priorAliases = new Map<string, string>();
@@ -298,6 +336,9 @@ export function refresh(ix: IndexContext, options: { full?: boolean; paths?: rea
   const now = Date.now();
 
   store.transaction(() => {
+    // Whether any note was added, removed, renamed, retitled, or became visible to someone else.
+    // Each gets a new `names` token in meta, so a table of names can be kept until it changes.
+    let namesChanged = full;
     if (full) {
       // FTS5's own command: deleting a contentless table's rows one by one is slow.
       db.exec("DELETE FROM notes; INSERT INTO fts(fts) VALUES ('delete-all'); DELETE FROM links; DELETE FROM aliases WHERE origin IN ('id', 'alias'); DELETE FROM files;");
@@ -307,7 +348,7 @@ export function refresh(ix: IndexContext, options: { full?: boolean; paths?: rea
     const removedHashes = new Map<string, string>();
     for (const rel of removed) {
       const hash = hashes.get(rel);
-      if (hash) removedHashes.set(hash, rel);
+      if (hash) { removedHashes.set(hash, rel); namesChanged = true; }
       const row = noteId.get(rel) as { nid: number } | undefined;
       if (row) { deleteFts.run(row.nid); deleteNote.run(row.nid); }
       deleteLinks.run(rel);
@@ -349,6 +390,10 @@ export function refresh(ix: IndexContext, options: { full?: boolean; paths?: rea
       // Other notes' links may resolve through this note's names: if they changed, every link is looked at again.
       const before = priorAliases.get(rel);
       if (before !== undefined && before !== built.row.aliases) aliasesChanged = true;
+      if (!namesChanged) {
+        const was = priorNames.get(rel) as Parameters<typeof nameKey>[0] | undefined;
+        namesChanged = !was || nameKey(was) !== nameKey(built.row);
+      }
       const prior = noteId.get(rel) as { nid: number } | undefined;
       if (prior) deleteFts.run(prior.nid);
       deleteLinks.run(rel);
@@ -369,6 +414,7 @@ export function refresh(ix: IndexContext, options: { full?: boolean; paths?: rea
     for (const [rel, stat] of disk) {
       if (!stat.note && (full || !known.has(rel))) insertFile.run(rel, 0, 0, 0);
     }
+    if (namesChanged) markNames.run(randomUUID());
     if (parsed > 0) lap(`notes loop: read ${Math.round(readMs)} ms, parse ${Math.round(buildMs)} ms, full text ${Math.round(ftsMs)} ms, other writes ${Math.round(performance.now() - loopStart - readMs - buildMs - ftsMs)} ms`);
   });
 
@@ -483,17 +529,56 @@ function resolveLinks(ix: IndexContext, files: ReadonlySet<string>, only: Readon
   });
 }
 
+/** Where the meta table keeps what each event file's last line read looked like. */
+const EVENT_TAIL = 'events_tail:';
+
+/** A fingerprint of the bytes just before `offset`: the end of the last line read. */
+function tailOf(file: string, offset: number): string {
+  const length = Math.min(offset, 256);
+  const buffer = Buffer.alloc(length);
+  const fd = openSync(file, 'r');
+  try { readSync(fd, buffer, 0, length, offset - length); } finally { closeSync(fd); }
+  return createHash('sha1').update(buffer).digest('hex');
+}
+
+/**
+ * The rows one line stands for: one per note when it names several
+ * (`paths`), and one per time when it is a run (`repeat`), spread evenly from
+ * `time` to `until`. A line without a time, a verb or a note is skipped.
+ */
+export function eventRows(event: Record<string, unknown>): { time: number; actor: string; verb: string; path: string; session: string | null; from: string | null; query: string | null }[] {
+  const time = Date.parse(String(event.time));
+  if (!Number.isFinite(time) || typeof event.verb !== 'string') return [];
+  const paths = typeof event.path === 'string' ? [event.path]
+    : Array.isArray(event.paths) ? event.paths.filter((item): item is string => typeof item === 'string').slice(0, EVENT_LINE_MAX) : [];
+  if (paths.length === 0) return [];
+  const asked = typeof event.repeat === 'number' && Number.isFinite(event.repeat) ? Math.max(1, Math.floor(event.repeat)) : 1;
+  const repeat = Math.max(1, Math.min(asked, Math.floor(EVENT_LINE_MAX / paths.length)));
+  const until = Date.parse(String(event.until));
+  const span = repeat > 1 && Number.isFinite(until) && until > time ? until - time : 0;
+  const base = {
+    actor: String(event.actor ?? 'owner'), verb: event.verb,
+    session: typeof event.session === 'string' ? event.session : null,
+    from: typeof event.from === 'string' ? event.from : null,
+    query: typeof event.query === 'string' ? event.query : null,
+  };
+  const rows = [];
+  for (let at = 0; at < repeat; at += 1) {
+    const when = repeat > 1 ? time + Math.round((span * at) / (repeat - 1)) : time;
+    for (const rel of paths) rows.push({ ...base, time: when, path: rel });
+  }
+  return rows;
+}
+
 function ingestEvents(ix: IndexContext): number {
   const { store, root } = ix;
   const dir = eventsDir(root);
   if (!existsSync(dir)) return 0;
-  const files: { rel: string; size: number }[] = [];
+  const names: string[] = [];
   for (const host of readdirSync(dir, { withFileTypes: true })) {
     if (!host.isDirectory()) continue;
     for (const entry of readdirSync(path.join(dir, host.name), { withFileTypes: true })) {
-      if (!entry.isFile() || !entry.name.endsWith('.jsonl')) continue;
-      const rel = `${host.name}/${entry.name}`;
-      files.push({ rel, size: statSync(path.join(dir, rel)).size });
+      if (entry.isFile() && entry.name.endsWith('.jsonl')) names.push(`${host.name}/${entry.name}`);
     }
   }
   const insert = store.db.prepare('INSERT INTO events(time, actor, verb, path, session, from_path, query) VALUES (?, ?, ?, ?, ?, ?, ?)');
@@ -503,32 +588,53 @@ function ingestEvents(ix: IndexContext): number {
     // Offsets are read inside the write lock, so two processes never read the same lines.
     const offsets = new Map<string, number>();
     for (const row of store.db.prepare('SELECT file, offset FROM event_files').all() as { file: string; offset: number }[]) offsets.set(row.file, row.offset);
-    // A file that shrank was rewritten: start the events over.
-    if (files.some((file) => (offsets.get(file.rel) ?? 0) > file.size)) {
-      store.db.exec('DELETE FROM events; DELETE FROM event_files;');
+    // Sizes taken under the same lock as the offsets: one taken before it could be older
+    // than an offset another process has since moved past, and look like a file that shrank.
+    const files: { rel: string; size: number }[] = [];
+    let rewritten = false;
+    for (const rel of names) {
+      try { files.push({ rel, size: statSync(path.join(dir, rel)).size }); } catch { rewritten = true; }
+    }
+    const present = new Set(files.map((file) => file.rel));
+    // A file that shrank, went away, or whose last line read is no longer what it was, was
+    // rewritten (by hand, or by git): start the events over, since nothing says which lines are new.
+    rewritten ||= [...offsets.keys()].some((rel) => !present.has(rel)) || files.some((file) => {
+      const offset = offsets.get(file.rel) ?? 0;
+      if (offset > file.size) return true;
+      const tail = store.meta(`${EVENT_TAIL}${file.rel}`);
+      if (offset === 0 || tail === null) return false;
+      try { return tail !== tailOf(path.join(dir, file.rel), offset); } catch { return true; }
+    });
+    if (rewritten) {
+      store.db.exec(`DELETE FROM events; DELETE FROM event_files; DELETE FROM meta WHERE key LIKE '${EVENT_TAIL}%';`);
       offsets.clear();
     }
     for (const file of files) {
       const offset = offsets.get(file.rel) ?? 0;
       if (file.size <= offset) continue;
-      const fd = openSync(path.join(dir, file.rel), 'r');
       const buffer = Buffer.alloc(file.size - offset);
-      try { readSync(fd, buffer, 0, buffer.length, offset); } finally { closeSync(fd); }
+      let tail: string;
+      try {
+        const fd = openSync(path.join(dir, file.rel), 'r');
+        try { readSync(fd, buffer, 0, buffer.length, offset); } finally { closeSync(fd); }
+      } catch {
+        // Gone since it was listed: the next pass finds it missing and starts over.
+        continue;
+      }
       const end = buffer.lastIndexOf(0x0a);
       if (end < 0) continue;
+      try { tail = tailOf(path.join(dir, file.rel), offset + end + 1); } catch { continue; }
       for (const line of buffer.subarray(0, end).toString('utf8').split('\n')) {
         if (!line.trim()) continue;
         let event: Record<string, unknown>;
         try { event = JSON.parse(line) as Record<string, unknown>; } catch { continue; }
-        const time = Date.parse(String(event.time));
-        if (!Number.isFinite(time) || typeof event.path !== 'string' || typeof event.verb !== 'string') continue;
-        insert.run(time, String(event.actor ?? 'owner'), event.verb, event.path,
-          typeof event.session === 'string' ? event.session : null,
-          typeof event.from === 'string' ? event.from : null,
-          typeof event.query === 'string' ? event.query : null);
-        count += 1;
+        for (const row of eventRows(event)) {
+          insert.run(row.time, row.actor, row.verb, row.path, row.session, row.from, row.query);
+          count += 1;
+        }
       }
       setOffset.run(file.rel, offset + end + 1);
+      store.setMeta(`${EVENT_TAIL}${file.rel}`, tail);
     }
   });
   return count;

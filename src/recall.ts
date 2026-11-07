@@ -43,6 +43,14 @@ export interface RecallOptions {
   /** Characters of excerpt to spend. */
   readonly budget?: number;
   readonly limit?: number;
+  /** Notes to leave out of the pack, because the caller shows them already. They still lead to their neighbours. */
+  readonly exclude?: readonly string[];
+  /**
+   * Whether to record a `recall` event for what is returned (default true).
+   * A pane that lists what else a note is about hands nothing to anyone, so
+   * it should not warm those notes every time a note is opened.
+   */
+  readonly record?: boolean;
 }
 
 const KIND_WEIGHT: Readonly<Record<Kind, number>> = { decision: 1.3, card: 1.2, note: 1, log: 0.85 };
@@ -156,8 +164,9 @@ export function recall(vault: Vault, cue: string, options: RecallOptions = {}): 
 
   const chosen: typeof scored = [];
   const hashes = new Set<string>();
+  const excluded = new Set(options.exclude ?? []);
   for (const candidate of scored) {
-    if (hashes.has(candidate.row.hash)) continue;
+    if (excluded.has(candidate.row.path) || hashes.has(candidate.row.hash)) continue;
     if (candidate.superseded) {
       const successor = db.prepare(`SELECT src FROM links WHERE resolved = ? AND relation = 'supersedes' UNION
         SELECT resolved FROM links WHERE src = ? AND relation = 'superseded_by' AND resolved IS NOT NULL`).all(candidate.row.path, candidate.row.path) as { src: string }[];
@@ -186,7 +195,7 @@ export function recall(vault: Vault, cue: string, options: RecallOptions = {}): 
       score: Math.round(candidate.score * 1000) / 1000, why: candidate.why.slice(0, 3), excerpt,
     });
   }
-  vault.recordEvent('recall', items.map((item) => item.path), { query: cue });
+  if (options.record !== false) vault.recordEvent('recall', items.map((item) => item.path), { query: cue });
   return { cue, items, chars: spent, omitted: Math.max(0, chosen.length - items.length) };
 }
 

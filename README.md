@@ -22,6 +22,7 @@ noto-vault init          # .noto/brain.yaml, .noto/access.yaml, .noto/scripts/
 noto-vault index         # about 9 s for 8,000 notes the first time, under 100 ms after
 noto-vault recall "what did we decide about index names"
 noto-vault search 改造方案
+noto-vault about argus   # what links to a note, what it names, who read it, which agents see it
 noto-vault suggest       # links the notes are missing, each with an id
 noto-vault suggest --review               # one at a time: link it, never, skip; then apply the yes
 noto-vault suggest --propose <id...>      # or name them, as a proposal to review
@@ -29,6 +30,7 @@ noto-vault suggest --dismiss <id...>      # never suggest these again
 noto-vault proposals show <id>
 noto-vault proposals accept <id>
 noto-vault graph --out graph.json         # nodes with heat, edges with weights
+noto-vault record write notes/plan.md     # say a note was written outside Noto (an agent's hook does this)
 ```
 
 `noto-vault help` lists every command.
@@ -41,7 +43,36 @@ An agent gets a key, and the key names what it may do:
 noto-vault key add claude-code      # prints the key once, adds the principal to .noto/access.yaml
 claude mcp add noto-vault -e NOTO_VAULT_ROOT=$HOME/my-vault -e NOTO_VAULT_KEY=<key> \
   -- node /path/to/vault/bin/noto-vault.mjs mcp
+noto-vault key revoke claude-code   # takes its keys back; a running server refuses it on its next request
 ```
+
+An editor changes the same file through `addAgent`, `revokeAgent` and
+`setFolderSensitivity`. They edit only the lines they are about, in the
+file's own indent, so its comments stay, and each edit is read back with
+the server's parser before it is saved: if the file would mean anything
+besides the asked-for change, nothing is written and a `PolicyEditError`
+says which part to change by hand. `privacyMarks` names the folders a
+pattern locks by name, and `noteSensitivity` says whether a note's own
+frontmatter makes it stricter than its folder; neither opens the index.
+
+A server stops serving a folder whose `.noto` was taken away (an editor
+turning memory off moves it to the Trash): it answers that the folder no
+longer keeps memory rather than opening the vault anew under no policy.
+
+What an agent does is recorded under its name, never as yours: a server
+under its key (or, started with `--owner`, under the name its client gives),
+and the command line under `NOTO_ACTOR` or the agent that runs it (Claude
+Code and Codex say so in their environment). An agent that edits notes
+itself can say so too, with a hook after each edit; Note Info then lists it
+beside the note's commits:
+
+```json
+{ "hooks": { "PostToolUse": [ { "matcher": "Read|Write|Edit|MultiEdit",
+  "hooks": [ { "type": "command", "command": "node /path/to/vault/bin/noto-vault.mjs record --hook" } ] } ] } }
+```
+
+That goes in Claude Code's `settings.json`. It records only notes in a folder
+that keeps memory, opens no index, and never fails the agent's step.
 
 The MCP server speaks both the `initialize` handshake (2025-11-25 and earlier)
 and per-request metadata (2026-07-28). Its tools are the eight verbs: `recall`,

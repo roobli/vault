@@ -1,10 +1,11 @@
 import { execFileSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { PassThrough } from 'node:stream';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { keyHash } from '../src/access.js';
+import { run } from '../src/cli.js';
 import { serve } from '../src/mcp.js';
 import { Vault } from '../src/vault.js';
 
@@ -81,5 +82,107 @@ describe('the vault over MCP', () => {
     } finally {
       vault.close();
     }
+  });
+});
+
+describe('a folder that stops keeping memory', () => {
+  /** Two searches by an agent without a key, with .noto taken away between them. */
+  async function before_and_after(): Promise<Record<string, any>[]> {
+    const vault = await Vault.open(root, {});
+    const input = new PassThrough();
+    const output = new PassThrough();
+    const answers: Record<string, any>[] = [];
+    let waiting: (() => void) | null = null;
+    let buffer = '';
+    output.on('data', (chunk) => {
+      buffer += chunk.toString('utf8');
+      const lines = buffer.split('\n');
+      buffer = lines.pop()!;
+      for (const line of lines.filter(Boolean)) answers.push(JSON.parse(line));
+      waiting?.();
+    });
+    const next = (count: number) => new Promise<void>((resolve) => { waiting = () => { if (answers.length >= count) resolve(); }; waiting(); });
+    const done = serve(vault, { input, output, reopen: () => Vault.open(root, {}) });
+    const search = (id: number) => input.write(`${JSON.stringify({ jsonrpc: '2.0', id, method: 'tools/call', params: { ...META, name: 'search', arguments: { query: 'audit' } } })}\n`);
+    try {
+      search(1);
+      await next(1);
+      rmSync(path.join(root, '.noto'), { recursive: true, force: true });
+      search(2);
+      await next(2);
+    } finally {
+      input.end();
+      await done;
+      vault.close();
+    }
+    return answers;
+  }
+
+  it('is not served once its .noto is taken away', async () => {
+    const [first, second] = await before_and_after();
+    expect(first!.result.isError).toBe(false);
+    expect(second!.result.isError).toBe(true);
+    expect(second!.result.content[0].text).toMatch(/no longer keeps memory/);
+    expect(existsSync(path.join(root, '.noto'))).toBe(false);
+  });
+
+  it('does not give an agent that was turned off its reading back, or make .noto anew', async () => {
+    writeFileSync(path.join(root, '.noto', 'access.yaml'), 'principals:\n  default:\n    read: []\n    verbs: []\n');
+    const [first, second] = await before_and_after();
+    expect(first!.result?.isError ?? true).toBe(true);
+    expect(second!.result?.isError ?? true).toBe(true);
+    expect(existsSync(path.join(root, '.noto'))).toBe(false);
+  });
+});
+
+describe('a server started for a folder that does not keep memory', () => {
+  it('refuses, and makes no .noto', async () => {
+    rmSync(path.join(root, '.noto'), { recursive: true, force: true });
+    const said: string[] = [];
+    const error = console.error;
+    console.error = (...parts: unknown[]) => { said.push(parts.join(' ')); };
+    try {
+      await run(['mcp', '--root', root]);
+    } finally {
+      console.error = error;
+    }
+    expect(process.exitCode).toBe(2);
+    process.exitCode = 0;
+    expect(said.join('\n')).toMatch(/does not keep memory/);
+    expect(existsSync(path.join(root, '.noto'))).toBe(false);
+  });
+});
+
+describe('who a server acts for', () => {
+  it('records an owner server\'s reads under the name its client gives, in either era, and a keyed one under its key', async () => {
+    const lines = async () => {
+      const { readdirSync, readFileSync } = await import('node:fs');
+      const dir = path.join(root, '.noto', 'events');
+      return readdirSync(dir).flatMap((host) => readdirSync(path.join(dir, host)).flatMap((file) =>
+        readFileSync(path.join(dir, host, file), 'utf8').split('\n').filter(Boolean).map((line) => JSON.parse(line) as Record<string, unknown>)));
+    };
+    const read = (id: number, meta: object = {}) => ({ jsonrpc: '2.0', id, method: 'tools/call', params: { name: 'read', arguments: { ref: 'notes/argus.md' }, ...meta } });
+    const owner = await Vault.open(root, { owner: true });
+    try {
+      await talk(owner, [
+        { jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'Claude Code', version: '1' } } },
+        read(2),
+      ]);
+    } finally {
+      owner.close();
+    }
+    const again = await Vault.open(root, { owner: true });
+    try {
+      await talk(again, [read(3, META)]);
+    } finally {
+      again.close();
+    }
+    const keyed = await Vault.open(root, { key: 'k' });
+    try {
+      await talk(keyed, [{ jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'pretender', version: '1' } } }, read(2)]);
+    } finally {
+      keyed.close();
+    }
+    expect((await lines()).filter((line) => line.verb === 'read').map((line) => line.actor)).toEqual(['claude-code', 'test', 'agent']);
   });
 });

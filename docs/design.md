@@ -75,6 +75,13 @@ corroboration and the source card's record move it. Only a person writes
 never given to any principal but the owner: not in reads, search, recall,
 graph or suggestions.
 
+The index keeps, for each of kind, known and sensitivity, where the value came
+from: `note` (its frontmatter), `script`, `folder` (a path prefix in
+`access.yaml`), `config` (a `brain.yaml` field mapping, the card-name rule or
+the dated-name rule) or `default` (nothing said anything). When layers give the
+same sensitivity, the one nearest the note is named: the note, then a script,
+then the folder.
+
 ## Links
 
 Resolution is ported rule for rule from `resolveLink` in `vault.mjs`, the
@@ -114,21 +121,68 @@ Reads are not in git, so they are recorded. One JSON object per line in
 
 ```json
 {"time":"2026-11-05T01:02:03.456Z","actor":"owner","verb":"open","path":"A/B.md","session":"k3x9","from":"A/index.md"}
+{"time":"2026-11-05T01:04:00.000Z","actor":"claude-code","verb":"recall","paths":["A/B.md","C/D.md"],"session":"ea01","query":"index names"}
+{"time":"2026-11-05T01:05:10.000Z","actor":"owner","verb":"open","path":"A/B.md","session":"k3x9","repeat":4,"until":"2026-11-05T01:07:30.000Z"}
 ```
 
 | field | meaning |
 | --- | --- |
 | `time` | ISO 8601, UTC |
-| `actor` | the principal: `owner` for the person, or an agent's name |
-| `verb` | `open` (shown to a person), `read` (an agent read it), `recall` (put into a context pack), `cite` (an agent used it in an answer), `accept` and `reject` (a proposal) |
+| `actor` | who caused it: `owner` for the person, or an agent's name (below) |
+| `verb` | `open` (shown to a person), `read` (an agent read it), `recall` (put into a context pack), `cite` (an agent used it in an answer), `write` and `append` (an agent wrote it), `propose`, `accept` and `reject` (a proposal) |
 | `path` | vault-relative path |
+| `paths` | instead of `path`: the notes one call did this to, such as the notes one recall returned |
 | `session` | groups one sitting; optional |
 | `from` | the note this one was reached from, by a link; optional |
 | `query` | the cue, for `recall`; optional |
+| `repeat`, `until` | the same event this many times in a row, the first at `time` and the last at `until`; optional, one when absent |
 
 Files are per host, so two machines syncing the vault never conflict on them.
 Unknown fields are kept and ignored. The index reads each file from the byte
-offset it reached last time.
+offset it reached last time, and keeps a fingerprint of the bytes just before
+it: a file that shrank, went away, or whose fingerprint no longer matches
+(rewritten by hand or by git), is read again from the start, with every other
+file. Sizes are taken under the same lock as the offsets, so another process
+reading at the same moment never makes a file look shorter than it is.
+
+Two rules keep the files short. One call is one line: a recall that returns
+eight notes writes `paths` with eight entries, not eight lines. And a writer
+that lives a while (Noto, an MCP server) counts a repeat rather than writing
+it again: the same event (actor, verb, notes, session, link, cue) within a
+minute of the last of its run is added to a `repeat` line, written when the
+run ends or reaches the 1000 rows a reader counts for one line, while the first is written at once so the index sees it straight
+away. Lines already written are never changed. On the first real vault this
+cut 908 lines to 244, nearly all of it from recalls.
+
+### Who an event names
+
+An event names who caused it, so that an agent's reading is never counted as
+the person's (an agent's visits weigh `visit.agentWeight` in the trains of
+thought, and Note Info lists every reader by name):
+
+- Noto records the person's opens as `owner`.
+- An MCP server with a key records under the key's principal. A server
+  started with `--owner` serves an agent all the same, and records under the
+  name its client gives (`clientInfo.name`, made safe: `claude-code`).
+- The command line is the person's hands or an agent's. It records under
+  `NOTO_ACTOR` when that is set (`owner` says it is the person), else under
+  the agent that says so in its environment: Claude Code sets `CLAUDECODE=1`
+  (`claude-code`, one session per `CLAUDE_CODE_SESSION_ID`), Codex sets
+  `CODEX_THREAD_ID` (`codex`). Otherwise it is `owner`.
+- `noto-vault eval` measures recall and records nothing.
+
+What an agent writes by editing files itself reaches the index only through
+git, which cannot say who made a change. `noto-vault record <verb> <path...>`
+lets it say so: it appends a line in the vault each note is in, opens no
+index, and passes over anything that is not a note in a folder that keeps
+memory. `noto-vault record --hook` reads a tool hook's JSON on stdin (Claude
+Code's `PostToolUse`: `Read` is a read, `Write`, `Edit`, `MultiEdit` and
+`NotebookEdit` are writes) and never fails the agent's step. Only an agent's
+hook sends such a payload, so it is never recorded as the person's: it is the
+agent the environment names, or `claude-code`, since a hook may not be given
+the variables the agent's own commands get. Note Info then
+lists the agents that wrote a note beside its commits. The commit itself
+stays the person's: nothing is added to commit messages.
 
 ## Weights: nodes and edges
 
@@ -184,6 +238,22 @@ Recall is lazy: it records a `recall` event only for the notes it returns.
 owner unless `NOTO_VAULT_KEY` names another principal. The MCP server acts as
 the principal its key names, or as `default`.
 
+The file is the person's, often with comments, so the tools that change it
+(`key add`, `key revoke`, and an editor through `addAgent`, `revokeAgent`
+and `setFolderSensitivity`) change only the lines they are about, in the
+file's own layout. Each change is proved before it is saved: the new text,
+parsed as the server parses it, must equal the old policy with only that
+change applied, or nothing is written. Where the editor and the parser could
+disagree about a shape (a key written twice, a list where a map belongs),
+that proof is what keeps a privacy click from quietly dropping an agent's
+keys or a sealed folder. The file is replaced by a rename, never written in
+place, and a `.noto/` or `access.yaml` that is a link is refused. A revoked
+agent keeps its block, with `keys: []` and a `revoked:` time, so a list can
+say when; `default` is revoked by giving it nothing to read. A folder's
+privacy is its own pattern in one list, added only when the default or a
+folder around it would not give that level already. A running MCP server
+reads the file again before its next answer once it changes.
+
 ```yaml
 sensitivity:
   default: open
@@ -229,8 +299,17 @@ are made with git's plumbing against a temporary index, so the working tree,
 the person's index and their branches are never touched, and the refs are not
 branches, so nothing pushes them.
 
+A proposal is a ref anyone with git can write, so what it may touch is
+checked again when it is accepted: never a file under a dot folder (the
+folder's settings in `.noto/`, its scripts, `.git`) or `node_modules`, and
+never a file outside the vault when the vault is a folder of a larger
+repository. Such a proposal is refused, named, and stays to be rejected.
+
 Proposals are diffed without rename detection: a move is a deletion and an
-addition, and the reviewer sees and the accept applies both. Accepting merges
+addition, and the reviewer sees and the accept applies both. For showing one
+file side by side, `vault.proposalFile(id, path)` gives it at both ends, null
+where the file did not or will not exist; anyone but the owner sees only
+their own proposals' files. Accepting merges
 each file three ways (`git merge-file`: the file now, the base, the proposal)
 into the working tree, and stops on a conflict for that file. The person commits the result their usual way. Accepting or rejecting
 deletes the ref and records an event.
@@ -254,6 +333,13 @@ named by an id or alias written in its frontmatter, are never further than
 running text is read: not frontmatter, headings, code, links (labels
 included), URLs or paths.
 
+A suggestion's change is a splice that also records the words it replaces;
+`prepare(vault, suggestions)` turns the chosen ones into file changes and
+leaves out, by name, any whose note no longer has those words there (it was
+written to since, or is gone), so a list kept open for a while never puts a
+link in the wrong place. A stale link is only offered where the note still
+has a link at the place the index says.
+
 Nothing is applied until the person says so: `suggest --review` asks about
 each, strongest first, then makes the yes into one proposal and applies it
 if asked; `--propose <id...>` makes a proposal; `--dismiss <id...>` says no.
@@ -264,7 +350,10 @@ A no is a line in `.noto/dismissed.jsonl`:
 ```
 
 The file holds the type and both paths, not the id, so it reads without this
-package; a dismissal lapses when either note moves.
+package; a dismissal lapses when either note moves. `dismissals(vault)` lists
+them, the latest first, and `undismiss(vault, ids | 'all')` takes some or all
+back, keeping any line it cannot read as it was; both are the owner's, as
+writing the file is.
 
 ## Scripts
 
@@ -303,6 +392,23 @@ The same eight verbs through the CLI and the MCP server:
 
 Every write names its author. A direct write requires the principal's scope;
 anything else must be proposed.
+
+Besides the verbs, the CLI has views over the same index that change nothing:
+`backlinks`, `where`, `graph`, `suggest`, and `about`. `about <note>` (with
+`--json`, the `AboutNote` that `about()` returns) is what a pane beside a note
+in an editor shows: where its kind, known and sensitivity came from; its heat;
+what supersedes it; the notes that link here; the notes it names without a
+link, as `suggest` finds them; what is opened or changed with it; what recall
+finds with its title as the cue, less everything in the lists before; its
+broken links; reads per local day, readers and what led to it; commits and
+appends; and which agents can see it, and why not. It needs the `read` verb,
+leaves out of every list what the caller cannot see, and records nothing.
+Anyone but the owner gets the same refusal for a hidden note as for a missing
+one, and sees only its own entries among the readers and leads, and itself
+among the agents; the reads per day and the together weights count everyone,
+as heat, recall and suggest already do. It runs on every note switch, so it reads the index by the note's
+own keys; the name matcher behind the mentions is kept by an open vault
+until the index marks a change of names with a new `names` token in its meta table.
 
 ## Indexing
 

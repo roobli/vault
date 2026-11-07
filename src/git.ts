@@ -207,6 +207,13 @@ const showFile = (repo: GitRepo, commit: string, rel: string): string | null => 
   return result.status === 0 ? result.stdout.toString('utf8') : null;
 };
 
+/** One file of a proposal, as it was when the proposal was made and as proposed; null where there is no file. */
+export function proposalFile(repo: GitRepo, id: string, rel: string): { base: string | null; proposed: string | null } {
+  const ref = `${PROPOSAL_REFS}/${id}`;
+  const commit = git(repo.top, ['rev-parse', '--verify', ref]).trim();
+  return { base: showFile(repo, `${commit}~1`, rel), proposed: showFile(repo, commit, rel) };
+}
+
 export interface AcceptResult {
   readonly applied: readonly string[];
   readonly unchanged: readonly string[];
@@ -221,7 +228,11 @@ export interface AcceptResult {
 export function acceptProposal(repo: GitRepo, vaultRoot: string, id: string): AcceptResult {
   const ref = `${PROPOSAL_REFS}/${id}`;
   const commit = git(repo.top, ['rev-parse', '--verify', ref]).trim();
-  const files = git(repo.top, ['diff', '--no-renames', '--name-only', `${commit}~1`, commit]).split('\n').filter(Boolean).map((file) => file.slice(repo.prefix.length));
+  const raw = git(repo.top, ['diff', '--no-renames', '--name-only', `${commit}~1`, commit]).split('\n').filter(Boolean);
+  // A vault in a folder of a larger repository takes in only its own files.
+  const outside = raw.filter((file) => !file.startsWith(repo.prefix));
+  if (outside.length > 0) throw new Error(`The proposal ${id} changes ${outside.join(', ')}, outside the vault.`);
+  const files = raw.map((file) => file.slice(repo.prefix.length));
   const applied: string[] = [];
   const unchanged: string[] = [];
   const conflicts: string[] = [];

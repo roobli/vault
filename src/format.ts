@@ -1,5 +1,6 @@
 /** How the verbs' results read as text, for the terminal and for an agent. */
 
+import type { AboutNote } from './about.js';
 import type { RecallPack } from './recall.js';
 import type { Suggestion } from './suggest.js';
 import type { ReadResult, SearchHit } from './vault.js';
@@ -12,6 +13,40 @@ export function formatRead(note: ReadResult, withText = true): string {
     lines.push(`linked from: ${note.backlinks.slice(0, 12).map((link) => `${link.title}${link.relation ? ` (${link.relation})` : ''}`).join('; ')}${note.backlinks.length > 12 ? ` and ${note.backlinks.length - 12} more` : ''}`);
   }
   if (withText) lines.push('', note.text);
+  return lines.join('\n');
+}
+
+/** A heading, then a section per list that has anything in it, then one line per fact. */
+export function formatAbout(info: AboutNote): string {
+  const traced = (name: string, value: string | null, from: string) => `${name} ${value ?? 'unknown'} (${from})`;
+  const lines = [
+    `# ${info.title}`,
+    `${info.path}${info.id ? ` · id ${info.id}` : ''}${info.status ? ` · ${info.status}` : ''}`,
+    [traced('kind', info.kind.value, info.kind.from), traced('known', info.known.value, info.known.from), traced('sensitivity', info.sensitivity.value, info.sensitivity.from)].join(' · '),
+    `heat ${info.heat.heat.toFixed(2)} · ${info.heat.reads} reads · ${info.heat.writes} writes${info.heat.lastRead ? ` · last read ${info.heat.lastRead.slice(0, 10)}` : ''}`,
+  ];
+  if (info.tags.length > 0 || info.aliases.length > 0) lines.push([info.tags.length > 0 ? `tags ${info.tags.join(', ')}` : '', info.aliases.length > 0 ? `aliases ${info.aliases.join(', ')}` : ''].filter(Boolean).join(' · '));
+  if (info.supersededBy) lines.push(`superseded by ${info.supersededBy.title} (${info.supersededBy.path})`);
+  const section = (heading: string, count: number, rows: readonly string[]) => {
+    if (count === 0) return;
+    lines.push('', `${heading} (${count})`, ...rows.map((row) => `  ${row}`));
+    if (count > rows.length) lines.push(`  and ${count - rows.length} more`);
+  };
+  section('Links here', info.linksHereCount, info.linksHere.map((link) => `${link.title}  ${link.path}${link.relation ? `  (${link.relation})` : ''}`));
+  section('Named here without a link', info.namedHereCount, info.namedHere.map((item) => `${item.title}  ${item.to}: "${item.around.join('')}"`));
+  section('Opened or changed with it', info.togetherCount, info.together.map((item) => `${item.title}  ${item.path}  (${item.type === 'visit' ? 'opened with it' : 'changed with it'} ${item.count} times)`));
+  section('About the same', info.aboutSame.length, info.aboutSame.map((item) => `${item.title}  ${item.path}  (${item.why.join('; ')})`));
+  section('Broken links', info.outgoing.brokenCount, info.outgoing.broken.map((link) => `${link.target}  line ${link.line}`));
+  lines.push('');
+  lines.push(`Links out: ${info.outgoing.count}. Writes: ${info.writes.commits} commits, ${info.writes.appends} appends.`);
+  for (const agent of info.writes.agents) lines.push(`  written by ${agent.actor}: ${agent.count}, last ${agent.last.slice(0, 10)}`);
+  if (info.reads.length > 0) lines.push(`Reads by day: ${info.reads.map((entry) => `${entry.day} ${entry.count}`).join(', ')}`);
+  if (info.readers.length > 0) lines.push(`Readers: ${info.readers.map((entry) => `${entry.actor} ${entry.count} (last ${entry.last.slice(0, 10)})`).join(', ')}`);
+  if (info.leadsHere.length > 0) {
+    const how = (lead: AboutNote['leadsHere'][number]) => [lead.from, lead.query === null ? null : `recall "${lead.query}"`].filter(Boolean).join(' by ');
+    lines.push(`Reached from: ${info.leadsHere.map((lead) => `${how(lead)} ${lead.count}`).join(', ')}`);
+  }
+  if (info.agents.length > 0) lines.push(`Agents: ${info.agents.map((agent) => (agent.canSee ? `${agent.name} can see it` : `${agent.name} cannot, ${agent.why}`)).join('; ')}`);
   return lines.join('\n');
 }
 
