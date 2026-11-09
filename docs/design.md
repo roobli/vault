@@ -273,6 +273,18 @@ next open, as for any config edit.
 The sizes of excerpts (900 characters for the first three notes, 400 after,
 none under 120) shape the pack, not the ranking, and are not tuned here.
 
+A change of numbers can be tried before it is made. `recall <cue> --shadow
+file.yaml` and `eval <cases> --shadow file.yaml` read the `recall:` section
+of that file over the vault's own, so it names only what it changes, and
+run under both, recording nothing: no recall event, no eval run. Recall
+prints both packs side by side, place by place, with each of the shadow's
+notes' move (`+2` up, `-1` down, `=`, `new`) and the notes the shadow left
+out. Eval prints both score sets and their change, and each case whose first
+expected note moved, saying which gained a hit in the top k and which lost
+one. `--json` gives `shadowRecall()` and `shadowEval()` as they return. A
+file without a `recall:` section is refused, and `--shadow` with `--search`,
+which ranks by no recall config, is too.
+
 ### Measuring recall
 
 `noto-vault eval <cases.yaml>` (`evaluate(vault, file, {k, search, config,

@@ -14,10 +14,12 @@ import { about } from './about.js';
 import { agentActor, recordEvents, type EventVerb } from './events.js';
 import { isMarkdown } from './paths.js';
 import { initVault } from './init.js';
-import { formatAbout, formatRead, formatRecall, formatSearch, formatSuggestion, formatSuggestions, plainEmphasis, terminalEmphasis } from './format.js';
+import { formatAbout, formatRead, formatRecall, formatSearch, formatShadowEval, formatShadowRecall, formatSuggestion, formatSuggestions, plainEmphasis, terminalEmphasis } from './format.js';
 import { serve } from './mcp.js';
 import { evaluate, EvalCasesError } from './eval.js';
 import { recall } from './recall.js';
+import { loadShadowConfig, shadowEval, shadowRecall } from './shadow.js';
+import type { RecallConfig } from './config.js';
 import { dismiss, suggest, toChanges, type Suggestion, type SuggestionType } from './suggest.js';
 import { addAgent, revokeAgent } from './policy.js';
 import { AccessError, ConflictError, Vault, type ReviewOptions } from './vault.js';
@@ -28,6 +30,7 @@ const HELP = `noto-vault: a vault of Markdown notes as memory
   noto-vault index [--full]             bring the index up to date
   noto-vault status                     what the index holds
   noto-vault recall <cue...>            the notes that matter for a cue  [--from note] [--budget chars]
+                                        [--shadow file.yaml] beside the pack under that file's recall: section; records nothing
   noto-vault search <query...>          full text  [--limit n] [--kind k] [--folder dir]
   noto-vault read <note>                a note with its links, hash and heat  [--meta]
   noto-vault backlinks <note>           what links here
@@ -48,6 +51,7 @@ const HELP = `noto-vault: a vault of Markdown notes as memory
   noto-vault key revoke <principal>     take an agent's keys back
   noto-vault eval <cases.yaml>          how well recall finds what it should  [--k 5] [--search] [--no-record]
                                         (records no reads; appends the scores to .noto/eval/runs/<host>.jsonl)
+                                        [--shadow file.yaml] the scores under that file's recall: section beside them; records nothing
   noto-vault record <verb> <path...>    say a note was read or written outside Noto: open, read, cite, write, append
   noto-vault record --hook              the same, from an agent's tool hook on stdin (Claude Code's PostToolUse)
   noto-vault mcp [--owner]              serve the vault over MCP on stdio
@@ -81,7 +85,7 @@ async function main(argv: string[]): Promise<number> {
       folder: { type: 'string' }, from: { type: 'string' }, budget: { type: 'string' }, out: { type: 'string' }, types: { type: 'string' },
       min: { type: 'string' }, propose: { type: 'boolean' }, review: { type: 'boolean' }, dismiss: { type: 'boolean' }, message: { type: 'string' }, to: { type: 'string' }, base: { type: 'string' },
       rel: { type: 'string' }, owner: { type: 'boolean' }, k: { type: 'string' }, search: { type: 'boolean' }, meta: { type: 'boolean' },
-      hook: { type: 'boolean' }, record: { type: 'boolean' }, reason: { type: 'string' }, 'review-ms': { type: 'string' },
+      hook: { type: 'boolean' }, record: { type: 'boolean' }, shadow: { type: 'string' }, reason: { type: 'string' }, 'review-ms': { type: 'string' },
       help: { type: 'boolean', short: 'h' },
     },
   });
@@ -94,6 +98,16 @@ async function main(argv: string[]): Promise<number> {
   const print = (value: unknown, text: () => string) => console.log(json ? JSON.stringify(value, null, 2) : text());
   const number = (value: unknown, fallback?: number) => (typeof value === 'string' && value.trim() !== '' && Number.isFinite(Number(value)) ? Number(value) : fallback);
   const words = rest.join(' ').trim();
+  // Another recall: section to rank by beside the vault's own, for --shadow.
+  const shadowConfig = (vault: Vault): RecallConfig | null => {
+    if (values.shadow === undefined) return null;
+    if (typeof values.shadow !== 'string') throw new UsageError('--shadow takes a YAML file with a recall: section.');
+    try {
+      return loadShadowConfig(path.resolve(values.shadow), vault.config.recall);
+    } catch (error) {
+      throw new UsageError((error as Error).message);
+    }
+  };
   // What the person may say about a decision, for the record: why, and how long they looked.
   const reviewOf = (): ReviewOptions => {
     const ms = values['review-ms'];
@@ -168,7 +182,14 @@ async function main(argv: string[]): Promise<number> {
       case 'recall': {
         if (!words) throw new UsageError('recall needs a cue.');
         const budget = number(values.budget);
-        const pack = recall(vault, words, { ...(budget ? { budget } : {}), ...(typeof values.from === 'string' ? { from: values.from } : {}) });
+        const options = { ...(budget ? { budget } : {}), ...(typeof values.from === 'string' ? { from: values.from } : {}) };
+        const shadow = shadowConfig(vault);
+        if (shadow) {
+          const result = shadowRecall(vault, words, shadow, options);
+          print(result, () => formatShadowRecall(result));
+          return 0;
+        }
+        const pack = recall(vault, words, options);
         print(pack, () => formatRecall(pack));
         return 0;
       }
@@ -315,6 +336,13 @@ async function main(argv: string[]): Promise<number> {
       case 'eval': {
         const file = rest[0];
         if (!file) throw new UsageError('eval needs a cases file.');
+        const shadow = shadowConfig(vault);
+        if (shadow) {
+          if (values.search === true) throw new UsageError('--shadow compares recall configs, and --search does not rank by them.');
+          const result = shadowEval(vault, file, shadow, { k: number(values.k, 5)! });
+          print(result, () => formatShadowEval(result));
+          return 0;
+        }
         const report = evaluate(vault, file, { k: number(values.k, 5)!, search: values.search === true, record: values.record !== false });
         print(report, () => report.text);
         return 0;
