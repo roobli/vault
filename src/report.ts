@@ -7,7 +7,7 @@
  * are.
  */
 
-import { existsSync, lstatSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, lstatSync, readdirSync, readFileSync, realpathSync, writeFileSync, type Stats } from 'node:fs';
 import path from 'node:path';
 import { KINDS } from './config.js';
 import { evalRunsDir, type EvalRun } from './eval.js';
@@ -169,7 +169,8 @@ function evalSection(root: string, start: number, end: number): string[] {
   const out = ['## Recall evals', ''];
   const week = runs.filter((run) => run.at >= start && run.at < end);
   if (week.length === 0) return [...out, 'No eval was run this week.'];
-  const keyOf = (run: EvalRun) => JSON.stringify([run.file, run.mode ?? 'recall', run.k]);
+  // By who ran it too: a series from another principal (written before eval kept the owner's only) is its own.
+  const keyOf = (run: EvalRun) => JSON.stringify([run.file, run.mode ?? 'recall', run.k, run.actor]);
   const signed = (value: number, digits: number) => `${value >= 0 ? '+' : '-'}${Math.abs(value).toFixed(digits)}`;
   const rows: (string | number)[][] = [];
   for (const key of [...new Set(week.map(keyOf))]) {
@@ -257,19 +258,28 @@ export function weeklyReport(vault: Vault, options: ReportOptions = {}): string 
  * with the reason otherwise.
  */
 export function reportTarget(root: string, file: string): string {
-  const noto = path.join(root, '.noto');
-  const target = path.resolve(file);
+  // Against the vault's real path, so a vault opened through a link (as /tmp
+  // is on macOS) does not refuse the path it suggests; a relative --out is
+  // read from the vault, not from wherever the command was run.
+  const real = (() => { try { return realpathSync(root); } catch { return path.resolve(root); } })();
+  const asked = path.resolve(root, file);
+  const within = (base: string) => { const rel = path.relative(base, asked); return rel === '' || (rel !== '..' && !rel.startsWith(`..${path.sep}`) && !path.isAbsolute(rel)) ? rel : null; };
+  const fromRoot = within(path.resolve(root)) ?? within(real);
+  const target = fromRoot === null ? asked : path.join(real, fromRoot);
+  const noto = path.join(real, '.noto');
   const rel = path.relative(noto, target);
   const suggestion = 'Write it under .noto/reports/, such as .noto/reports/2026-W45.md.';
-  if (!rel || rel.startsWith('..') || path.isAbsolute(rel)) throw new Error(`A report is written inside the vault's .noto folder, not to ${file}. ${suggestion}`);
+  if (!rel || rel === '..' || rel.startsWith(`..${path.sep}`) || path.isAbsolute(rel)) throw new Error(`A report is written inside the vault's .noto folder, not to ${file}. ${suggestion}`);
   if (path.extname(target).toLowerCase() !== '.md') throw new Error(`A report is a .md file. ${suggestion}`);
   let at = noto;
   for (const part of ['', ...rel.split(path.sep)]) {
     at = part ? path.join(at, part) : at;
-    if (!existsSync(at)) continue;
-    const stat = lstatSync(at);
-    if (stat.isSymbolicLink()) throw new Error(`${path.relative(root, at)} is a link; a report is written only into the vault's own .noto folder.`);
-    if (at !== target && !stat.isDirectory()) throw new Error(`${path.relative(root, at)} is not a folder.`);
+    // lstat, not exists: a link whose target is missing must still be seen as a link.
+    let stat: Stats;
+    try { stat = lstatSync(at); } catch { continue; }
+    if (stat.isSymbolicLink()) throw new Error(`${path.relative(real, at)} is a link; a report is written only into the vault's own .noto folder.`);
+    if (at !== target && !stat.isDirectory()) throw new Error(`${path.relative(real, at)} is not a folder.`);
+    if (at === target && !stat.isFile()) throw new Error(`${path.relative(real, at)} is not a file a report can replace.`);
   }
   return target;
 }
@@ -277,7 +287,7 @@ export function reportTarget(root: string, file: string): string {
 /** Write a report where `reportTarget` allows, making its folders one at a time inside a `.noto/` that is there. */
 export function writeReport(root: string, file: string, text: string): string {
   const target = reportTarget(root, file);
-  const noto = path.join(root, '.noto');
+  const noto = path.join((() => { try { return realpathSync(root); } catch { return path.resolve(root); } })(), '.noto');
   const missing = `${root} does not keep memory (it has no .noto folder), so there is nowhere to write the report.`;
   if (!existsSync(noto)) throw new Error(missing);
   let at = noto;

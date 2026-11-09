@@ -293,9 +293,12 @@ record})`) asks recall each case's query, without recording a read, and
 scores the top `k` against the notes the case expects: hit@k (the share of
 cases with an expected note in the top k), recall, MRR, and the share whose
 first note is an expected one. Each run appends one line to
-`.noto/eval/runs/<host>.jsonl`, unless `--no-record` (`record: false`). The
-folders are made one at a time inside a `.noto/` that is there, as for the
-events, and lines are never changed.
+`.noto/eval/runs/<host>.jsonl`, unless `--no-record` (`record: false`). Only
+the owner's runs are kept: another principal ranks over its own view, so its
+scores are not the owner's series, and an agent must not move the numbers
+the owner reads; its run is measured and shown, not kept. The folders are
+made one at a time inside a `.noto/` that is there, as for the events, and
+lines are never changed.
 
 ```json
 {"time":"2026-11-09T09:00:00.000Z","actor":"owner","file":"eval/cases.yaml","mode":"recall","queries":40,"k":5,"hitAtK":0.85,"mrr":0.71,"firstHit":0.62,"schema":4,"config":"3f0c9a1b","version":"0.1.0"}
@@ -531,7 +534,9 @@ The report is the owner's: it names every reader and every note. It prints
 to stdout; `--out` writes it, but only as a `.md` file inside the vault's
 `.noto/` (`.noto/reports/2026-W45.md`), so it is never indexed as a note and
 never overwrites a setting. Its folders are made one at a time inside a
-`.noto/` that is there, and a link on the way is refused.
+`.noto/` that is there, and a link on the way is refused, one whose target
+is missing included. A relative `--out` is read from the vault, and a vault
+reached through a link takes the path it suggests.
 
 ## Indexing
 

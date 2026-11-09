@@ -245,7 +245,7 @@ export function parseRecallConfig(section: YamlValue | undefined, base: RecallCo
     statusWeight: { superseded: weight(status.superseded, base.statusWeight.superseded), archived: weight(status.archived, base.statusWeight.archived) },
     heat: weight(raw.heat, base.heat),
     limit: count(raw.limit, base.limit, 1),
-    pool: typeof raw.pool === 'number' && Number.isFinite(raw.pool) && raw.pool >= 1 ? raw.pool : base.pool,
+    pool: count(raw.pool, base.pool, 1),
     textCandidates: count(raw.text_candidates, base.textCandidates),
     textCandidatesShared: count(raw.text_candidates_shared, base.textCandidatesShared),
     bm25: { title: weight(bm25.title, base.bm25.title), path: weight(bm25.path, base.bm25.path), body: weight(bm25.body, base.bm25.body) },

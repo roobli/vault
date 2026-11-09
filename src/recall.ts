@@ -99,7 +99,8 @@ export function recall(vault: Vault, cue: string, options: RecallOptions = {}): 
   };
   // An agent's hidden notes must not crowd out what it can see.
   const any = search('loose', vault.principal.owner ? tuning.textCandidates : tuning.textCandidatesShared);
-  const best = any.length > 0 ? -any[0]!.rank : 1;
+  // Never zero: all-zero bm25 weights rank every row 0, and dividing by it made every score NaN.
+  const best = any.length > 0 && any[0]!.rank < 0 ? -any[0]!.rank : 1;
   // A title is the note's own summary: the share of the cue's words it holds counts on top.
   const terms = looseTerms(cue);
   const titleShare = (row: Row) => {
@@ -160,7 +161,9 @@ export function recall(vault: Vault, cue: string, options: RecallOptions = {}): 
     const superseded = vault.isSuperseded(row.path);
     const status = superseded ? tuning.statusWeight.superseded : row.status === 'archived' ? tuning.statusWeight.archived : 1;
     const source = row.source ? tuning.sourceWeight[row.source] ?? 1 : 1;
-    const score = candidate.relevance * tuning.kindWeight[row.kind] * (1 + tuning.heat * Math.log1p(heat)) * source * status;
+    const raw = candidate.relevance * tuning.kindWeight[row.kind] * (1 + tuning.heat * Math.log1p(heat)) * source * status;
+    // A weight the config allows can still overflow (heat: 1e308); a score is always a number.
+    const score = Number.isFinite(raw) ? raw : 0;
     return { ...candidate, score, superseded };
   }).sort((left, right) => right.score - left.score);
 

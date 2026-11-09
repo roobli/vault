@@ -2,6 +2,7 @@ import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, 
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { keyHash } from '../src/access.js';
 import { run } from '../src/cli.js';
 import { parseRecallConfig, recallConfigHash } from '../src/config.js';
 import { evaluate, evalRunsDir, recordEvalRun } from '../src/eval.js';
@@ -79,6 +80,16 @@ describe('the eval ledger', () => {
     await run(['--root', root, 'eval', cases, '--k', '2', '--search']);
     expect(runs()).toEqual([expect.objectContaining({ mode: 'search', k: 2, queries: 3, file: 'eval/cases.yaml' })]);
     expect(existsSync(path.join(root, '.noto', 'events'))).toBe(false);
+  });
+
+  it('keeps only the owner\'s runs: an agent\'s is measured and shown, not kept', async () => {
+    quiet();
+    write('.noto/access.yaml', `principals:\n  agent:\n    keys: [${keyHash('k')}]\n    verbs: [read, search, recall]\n`);
+    vi.stubEnv('NOTO_VAULT_KEY', 'k');
+    process.exitCode = undefined;
+    await run(['--root', root, 'eval', path.join(root, 'eval/cases.yaml')]);
+    expect(process.exitCode ?? 0).toBe(0);
+    expect(runs()).toEqual([]);
   });
 
   it('says a cases file that is not a list is the caller\'s to fix', async () => {

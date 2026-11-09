@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -164,5 +164,36 @@ describe('the weekly report', () => {
     await run(['--root', root, 'report', '--week', '2026-W45', '--out', out]);
     expect(process.exitCode).toBe(0);
     expect(readFileSync(out, 'utf8')).toBe(printed);
+  });
+
+  it('refuses a link on the way even when what it points to is not there yet', () => {
+    const outside = mkdtempSync(path.join(os.tmpdir(), 'vault-report-outside-'));
+    try {
+      mkdirSync(path.join(root, '.noto', 'reports'), { recursive: true });
+      symlinkSync(path.join(outside, 'leak.md'), path.join(root, '.noto', 'reports', 'w45.md'));
+      expect(() => reportTarget(root, path.join(root, '.noto', 'reports', 'w45.md'))).toThrow(/is a link/);
+      symlinkSync(path.join(outside, 'gone'), path.join(root, '.noto', 'elsewhere'));
+      expect(() => reportTarget(root, path.join(root, '.noto', 'elsewhere', 'w45.md'))).toThrow(/is a link/);
+      expect(existsSync(path.join(outside, 'leak.md'))).toBe(false);
+    } finally {
+      rmSync(outside, { recursive: true, force: true });
+    }
+  });
+
+  it('refuses a folder in the place of the file, and reads a relative path from the vault', () => {
+    mkdirSync(path.join(root, '.noto', 'reports', 'taken.md'), { recursive: true });
+    expect(() => reportTarget(root, path.join(root, '.noto', 'reports', 'taken.md'))).toThrow(/not a file/);
+    const relative = reportTarget(root, path.join('.noto', 'reports', 'w46.md'));
+    expect(relative.endsWith(path.join('.noto', 'reports', 'w46.md'))).toBe(true);
+  });
+
+  it('takes the path it suggests when the vault is reached through a link', () => {
+    const via = path.join(mkdtempSync(path.join(os.tmpdir(), 'vault-report-via-')), 'vault');
+    try {
+      symlinkSync(root, via);
+      expect(() => reportTarget(via, path.join(via, '.noto', 'reports', 'w45.md'))).not.toThrow();
+    } finally {
+      rmSync(path.dirname(via), { recursive: true, force: true });
+    }
   });
 });

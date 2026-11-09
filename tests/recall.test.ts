@@ -93,6 +93,22 @@ describe('recall config', () => {
     expect(tuned[0]).toBe('Logs/2026-11-01 budget.md');
     expect(tuned).not.toEqual(ranked);
   });
+
+  it('keeps every score a number under weights the config allows but that break the arithmetic', async () => {
+    brain('recall:\n  bm25: {title: 0, path: 0, body: 0}\n');
+    const flat = await pack('budget');
+    expect(flat.items.length).toBeGreaterThan(0);
+    expect(flat.items.every((item) => Number.isFinite(item.score))).toBe(true);
+    brain('recall:\n  heat: 1e308\n');
+    const huge = await pack('budget');
+    expect(huge.items.every((item) => Number.isFinite(item.score))).toBe(true);
+  });
+
+  it('takes only whole counts, the pool included', () => {
+    expect(parseRecallConfig(undefined).pool).toBe(2);
+    expect(parseRecallConfig({ pool: 1.5 } as never).pool).toBe(2);
+    expect(parseRecallConfig({ pool: 3 } as never).pool).toBe(3);
+  });
 });
 
 const SPELLED_OUT_VALUES = {

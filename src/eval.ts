@@ -129,7 +129,11 @@ export function evaluate(vault: Vault, file: string, options: EvalOptions = {}):
     ...rows.filter((row) => !row.hit).map((row) => `  miss: ${row.query}\n    got: ${row.top.slice(0, 3).join(' | ')}`),
   ].join('\n');
   const report = { cases: rows.length, k, hitRate, recall: meanRecall, mrr, firstHit, rows, text };
-  if (options.record !== false) {
+  // The owner's ledger only. Another principal ranks over its own view (its
+  // hidden notes left out, a wider candidate pool), so its scores are not the
+  // owner's series, and an agent must not be able to move the numbers the
+  // owner reads. Its run is measured and shown, just not kept.
+  if (options.record !== false && vault.principal.owner) {
     recordEvalRun(vault.root, {
       time: new Date().toISOString(), actor: vault.actor, file: path.relative(vault.root, path.resolve(file)).split(path.sep).join('/'),
       mode: bySearch ? 'search' : 'recall', queries: report.cases, k, hitAtK: hitRate, mrr, firstHit,
