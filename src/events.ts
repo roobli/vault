@@ -139,8 +139,8 @@ export function recordEvents(root: string, events: readonly VaultEvent[], host: 
   return true;
 }
 
-/** Make a folder that may be there already; false when its parent is not. */
-function folderIn(dir: string): boolean {
+/** Make a folder that may be there already; false when its parent is not, so a `.noto` taken away is never made anew. */
+export function folderIn(dir: string): boolean {
   try {
     mkdirSync(dir);
     return true;

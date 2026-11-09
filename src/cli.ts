@@ -16,11 +16,11 @@ import { isMarkdown } from './paths.js';
 import { initVault } from './init.js';
 import { formatAbout, formatRead, formatRecall, formatSearch, formatSuggestion, formatSuggestions, plainEmphasis, terminalEmphasis } from './format.js';
 import { serve } from './mcp.js';
+import { evaluate, EvalCasesError } from './eval.js';
 import { recall } from './recall.js';
 import { dismiss, suggest, toChanges, type Suggestion, type SuggestionType } from './suggest.js';
 import { addAgent, revokeAgent } from './policy.js';
 import { AccessError, ConflictError, Vault, type ReviewOptions } from './vault.js';
-import { parseYaml } from './yaml.js';
 
 const HELP = `noto-vault: a vault of Markdown notes as memory
 
@@ -46,7 +46,8 @@ const HELP = `noto-vault: a vault of Markdown notes as memory
   noto-vault supersede <old> <new>      mark old as superseded by new
   noto-vault key add <principal>        make a key for an agent and add it to .noto/access.yaml
   noto-vault key revoke <principal>     take an agent's keys back
-  noto-vault eval <cases.yaml>          how well recall finds what it should  [--k 5] [--search]   (records nothing)
+  noto-vault eval <cases.yaml>          how well recall finds what it should  [--k 5] [--search] [--no-record]
+                                        (records no reads; appends the scores to .noto/eval/runs/<host>.jsonl)
   noto-vault record <verb> <path...>    say a note was read or written outside Noto: open, read, cite, write, append
   noto-vault record --hook              the same, from an agent's tool hook on stdin (Claude Code's PostToolUse)
   noto-vault mcp [--owner]              serve the vault over MCP on stdio
@@ -72,13 +73,15 @@ async function main(argv: string[]): Promise<number> {
   const { values, positionals } = parseArgs({
     args: argv,
     allowPositionals: true,
+    // --no-record, and the like for any switch.
+    allowNegative: true,
     strict: false,
     options: {
       root: { type: 'string' }, json: { type: 'boolean' }, full: { type: 'boolean' }, limit: { type: 'string' }, kind: { type: 'string' },
       folder: { type: 'string' }, from: { type: 'string' }, budget: { type: 'string' }, out: { type: 'string' }, types: { type: 'string' },
       min: { type: 'string' }, propose: { type: 'boolean' }, review: { type: 'boolean' }, dismiss: { type: 'boolean' }, message: { type: 'string' }, to: { type: 'string' }, base: { type: 'string' },
       rel: { type: 'string' }, owner: { type: 'boolean' }, k: { type: 'string' }, search: { type: 'boolean' }, meta: { type: 'boolean' },
-      hook: { type: 'boolean' }, reason: { type: 'string' }, 'review-ms': { type: 'string' },
+      hook: { type: 'boolean' }, record: { type: 'boolean' }, reason: { type: 'string' }, 'review-ms': { type: 'string' },
       help: { type: 'boolean', short: 'h' },
     },
   });
@@ -312,7 +315,7 @@ async function main(argv: string[]): Promise<number> {
       case 'eval': {
         const file = rest[0];
         if (!file) throw new UsageError('eval needs a cases file.');
-        const report = evaluate(vault, file, number(values.k, 5)!, values.search === true);
+        const report = evaluate(vault, file, { k: number(values.k, 5)!, search: values.search === true, record: values.record !== false });
         print(report, () => report.text);
         return 0;
       }
@@ -384,34 +387,6 @@ async function review(vault: Vault, items: readonly Suggestion[], emphasis: (tex
   } finally {
     prompt.close();
   }
-}
-
-interface EvalCase { query: string; expect: string[]; note?: string }
-
-/** Hit rate, recall and mean reciprocal rank at k over a file of cases. */
-function evaluate(vault: Vault, file: string, k: number, bySearch: boolean) {
-  const cases = parseYaml(readFileSync(file, 'utf8'));
-  if (!Array.isArray(cases)) throw new UsageError('The cases file is a YAML list of {query, expect: [paths]}.');
-  const rows: { query: string; hit: boolean; recall: number; rank: number | null; top: string[] }[] = [];
-  for (const raw of cases as unknown as EvalCase[]) {
-    if (!raw || typeof raw.query !== 'string' || !Array.isArray(raw.expect)) continue;
-    const expected = raw.expect.map((ref) => vault.find(String(ref))?.path ?? String(ref));
-    // A measurement, not a use: nothing it finds is recorded as recalled.
-    const ranked = bySearch ? vault.search(raw.query, { limit: k }).map((hit) => hit.path) : recall(vault, raw.query, { limit: k, budget: 1_000_000, record: false }).items.map((item) => item.path);
-    const top = ranked.slice(0, k);
-    const found = expected.filter((rel) => top.includes(rel));
-    const first = top.findIndex((rel) => expected.includes(rel));
-    rows.push({ query: raw.query, hit: found.length > 0, recall: expected.length ? found.length / expected.length : 0, rank: first < 0 ? null : first + 1, top });
-  }
-  const n = rows.length || 1;
-  const hitRate = rows.filter((row) => row.hit).length / n;
-  const meanRecall = rows.reduce((sum, row) => sum + row.recall, 0) / n;
-  const mrr = rows.reduce((sum, row) => sum + (row.rank ? 1 / row.rank : 0), 0) / n;
-  const text = [
-    `${rows.length} cases, ${bySearch ? 'search' : 'recall'} at ${k}: hit ${(hitRate * 100).toFixed(0)}%, recall ${(meanRecall * 100).toFixed(0)}%, MRR ${mrr.toFixed(2)}`,
-    ...rows.filter((row) => !row.hit).map((row) => `  miss: ${row.query}\n    got: ${row.top.slice(0, 3).join(' | ')}`),
-  ].join('\n');
-  return { cases: rows.length, k, hitRate, recall: meanRecall, mrr, rows, text };
 }
 
 /** What a person or an agent may say happened to a note outside Noto; the rest are the vault's own to record. */
@@ -498,8 +473,9 @@ export async function run(argv: string[]): Promise<void> {
   try {
     process.exitCode = await main(argv);
   } catch (error) {
-    const known = error instanceof UsageError || error instanceof AccessError || error instanceof ConflictError;
+    const usage = error instanceof UsageError || error instanceof EvalCasesError;
+    const known = usage || error instanceof AccessError || error instanceof ConflictError;
     console.error(known ? (error as Error).message : (error as Error).stack ?? String(error));
-    process.exitCode = error instanceof UsageError ? 2 : 1;
+    process.exitCode = usage ? 2 : 1;
   }
 }

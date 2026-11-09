@@ -9,6 +9,8 @@ export { indexPath } from './store.js';
 export { initVault } from './init.js';
 export type { AboutNote, AboutOptions, Origin, Traced } from './about.js';
 export { recall, excerptOf } from './recall.js';
+export { evaluate, evalRunsDir, packageVersion, readEvalCases, recordEvalRun, EvalCasesError } from './eval.js';
+export type { EvalCase, EvalOptions, EvalReport, EvalRow, EvalRun } from './eval.js';
 export { formatRecall } from './format.js';
 export type { RecallItem, RecallPack, RecallOptions } from './recall.js';
 export { dismiss, dismissals, prepare, suggest, toChanges, undismiss } from './suggest.js';

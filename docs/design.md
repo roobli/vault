@@ -28,6 +28,7 @@ rebuilds it from the files.
     scripts/*.mjs       the vault's own rules, as hooks (tracked)
     events/<host>/<yyyy-mm>.jsonl   reads and visits, append-only (tracked by choice)
     dismissed.jsonl     suggestions the person said no to (tracked)
+    eval/runs/<host>.jsonl   each eval run's scores, append-only (tracked by choice)
     index.sqlite        the index (ignored; delete it at any time)
 ```
 
@@ -173,7 +174,8 @@ thought, and Note Info lists every reader by name):
   the agent that says so in its environment: Claude Code sets `CLAUDECODE=1`
   (`claude-code`, one session per `CLAUDE_CODE_SESSION_ID`), Codex sets
   `CODEX_THREAD_ID` (`codex`). Otherwise it is `owner`.
-- `noto-vault eval` measures recall and records nothing.
+- `noto-vault eval` measures recall and records no reads; it keeps its
+  scores in a ledger of its own (below).
 
 What an agent writes by editing files itself reaches the index only through
 git, which cannot say who made a change. `noto-vault record <verb> <path...>`
@@ -270,6 +272,32 @@ next open, as for any config edit.
 
 The sizes of excerpts (900 characters for the first three notes, 400 after,
 none under 120) shape the pack, not the ranking, and are not tuned here.
+
+### Measuring recall
+
+`noto-vault eval <cases.yaml>` (`evaluate(vault, file, {k, search, config,
+record})`) asks recall each case's query, without recording a read, and
+scores the top `k` against the notes the case expects: hit@k (the share of
+cases with an expected note in the top k), recall, MRR, and the share whose
+first note is an expected one. Each run appends one line to
+`.noto/eval/runs/<host>.jsonl`, unless `--no-record` (`record: false`). The
+folders are made one at a time inside a `.noto/` that is there, as for the
+events, and lines are never changed.
+
+```json
+{"time":"2026-11-09T09:00:00.000Z","actor":"owner","file":"eval/cases.yaml","mode":"recall","queries":40,"k":5,"hitAtK":0.85,"mrr":0.71,"firstHit":0.62,"schema":4,"config":"3f0c9a1b","version":"0.1.0"}
+```
+
+| field | meaning |
+| --- | --- |
+| `time`, `actor` | when, and who ran it, as for an event |
+| `file` | the cases file, from the vault's root |
+| `mode` | `recall`, or `search` with `--search` |
+| `queries`, `k` | how many cases were scored, and at how many notes |
+| `hitAtK`, `mrr`, `firstHit` | the scores, each from 0 to 1 |
+| `schema` | the index schema version |
+| `config` | the first eight hex digits of the SHA-256 of the recall config ranked by, its keys sorted, so runs under different numbers can be told apart |
+| `version` | this package's version |
 
 ## Access
 
