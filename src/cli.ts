@@ -19,6 +19,7 @@ import { serve } from './mcp.js';
 import { evaluate, EvalCasesError } from './eval.js';
 import { recall } from './recall.js';
 import { loadShadowConfig, shadowEval, shadowRecall } from './shadow.js';
+import { reportTarget, weekRange, weeklyReport, writeReport } from './report.js';
 import type { RecallConfig } from './config.js';
 import { dismiss, suggest, toChanges, type Suggestion, type SuggestionType } from './suggest.js';
 import { addAgent, revokeAgent } from './policy.js';
@@ -52,6 +53,8 @@ const HELP = `noto-vault: a vault of Markdown notes as memory
   noto-vault eval <cases.yaml>          how well recall finds what it should  [--k 5] [--search] [--no-record]
                                         (records no reads; appends the scores to .noto/eval/runs/<host>.jsonl)
                                         [--shadow file.yaml] the scores under that file's recall: section beside them; records nothing
+  noto-vault report [--week 2026-W45]   a week of the vault as Markdown: notes, broken and unlinked notes, proposals,
+                                        evals, reads (default: this week, UTC)  [--out .noto/reports/2026-W45.md]
   noto-vault record <verb> <path...>    say a note was read or written outside Noto: open, read, cite, write, append
   noto-vault record --hook              the same, from an agent's tool hook on stdin (Claude Code's PostToolUse)
   noto-vault mcp [--owner]              serve the vault over MCP on stdio
@@ -85,7 +88,7 @@ async function main(argv: string[]): Promise<number> {
       folder: { type: 'string' }, from: { type: 'string' }, budget: { type: 'string' }, out: { type: 'string' }, types: { type: 'string' },
       min: { type: 'string' }, propose: { type: 'boolean' }, review: { type: 'boolean' }, dismiss: { type: 'boolean' }, message: { type: 'string' }, to: { type: 'string' }, base: { type: 'string' },
       rel: { type: 'string' }, owner: { type: 'boolean' }, k: { type: 'string' }, search: { type: 'boolean' }, meta: { type: 'boolean' },
-      hook: { type: 'boolean' }, record: { type: 'boolean' }, shadow: { type: 'string' }, reason: { type: 'string' }, 'review-ms': { type: 'string' },
+      hook: { type: 'boolean' }, record: { type: 'boolean' }, shadow: { type: 'string' }, week: { type: 'string' }, reason: { type: 'string' }, 'review-ms': { type: 'string' },
       help: { type: 'boolean', short: 'h' },
     },
   });
@@ -345,6 +348,18 @@ async function main(argv: string[]): Promise<number> {
         }
         const report = evaluate(vault, file, { k: number(values.k, 5)!, search: values.search === true, record: values.record !== false });
         print(report, () => report.text);
+        return 0;
+      }
+      case 'report': {
+        if (typeof values.week === 'string' && !weekRange(values.week)) throw new UsageError(`--week takes an ISO week, such as 2026-W45; ${values.week} is not one.`);
+        const text = weeklyReport(vault, typeof values.week === 'string' ? { week: values.week } : {});
+        if (typeof values.out !== 'string') { process.stdout.write(text); return 0; }
+        try {
+          reportTarget(root, values.out);
+        } catch (error) {
+          throw new UsageError((error as Error).message);
+        }
+        console.log(`Wrote the report to ${path.relative(process.cwd(), writeReport(root, values.out, text)) || values.out}.`);
         return 0;
       }
       case 'mcp':

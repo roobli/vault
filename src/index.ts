@@ -14,6 +14,8 @@ export type { EvalCase, EvalOptions, EvalReport, EvalRow, EvalRun } from './eval
 export { formatRecall, formatShadowEval, formatShadowRecall } from './format.js';
 export { loadShadowConfig, shadowEval, shadowRecall } from './shadow.js';
 export type { ShadowCase, ShadowEval, ShadowMove, ShadowRecall } from './shadow.js';
+export { isoWeek, reportTarget, weekRange, weeklyReport, writeReport } from './report.js';
+export type { ReportOptions } from './report.js';
 export type { RecallItem, RecallPack, RecallOptions } from './recall.js';
 export { dismiss, dismissals, prepare, suggest, toChanges, undismiss } from './suggest.js';
 export type { Dismissal, Suggestion, SuggestionType, SuggestOptions } from './suggest.js';

@@ -29,6 +29,7 @@ rebuilds it from the files.
     events/<host>/<yyyy-mm>.jsonl   reads and visits, append-only (tracked by choice)
     dismissed.jsonl     suggestions the person said no to (tracked)
     eval/runs/<host>.jsonl   each eval run's scores, append-only (tracked by choice)
+    reports/<week>.md   weekly reports, when written there (tracked by choice)
     index.sqlite        the index (ignored; delete it at any time)
 ```
 
@@ -488,7 +489,7 @@ Every write names its author. A direct write requires the principal's scope;
 anything else must be proposed.
 
 Besides the verbs, the CLI has views over the same index that change nothing:
-`backlinks`, `where`, `graph`, `suggest`, and `about`. `about <note>` (with
+`backlinks`, `where`, `graph`, `suggest`, `about`, and `report`. `about <note>` (with
 `--json`, the `AboutNote` that `about()` returns) is what a pane beside a note
 in an editor shows: where its kind, known and sensitivity came from; its heat;
 what supersedes it; the notes that link here; the notes it names without a
@@ -503,6 +504,34 @@ among the agents; the reads per day and the together weights count everyone,
 as heat, recall and suggest already do. It runs on every note switch, so it reads the index by the note's
 own keys; the name matcher behind the mentions is kept by an open vault
 until the index marks a change of names with a new `names` token in its meta table.
+
+`report [--week 2026-W45] [--out file]` (`weeklyReport(vault, {week})`) is
+a week of the vault as plain Markdown, headings and short tables and no
+HTML, so it reads the same in a terminal, Typora and GitHub. It is built
+from the index, the event logs, the eval ledger and the open proposals, with
+no model and no network, and gives the same text for the same vault and
+week; weeks are ISO weeks in UTC, this week when not given. It has the notes
+by kind; the broken links, as `status` counts them, and the notes other than
+logs that link nowhere and that nothing links to, each with its count and
+the first 20; the proposals made, accepted, rejected and pending in the
+week, with the accept rate and the median `reviewMs` where one was given;
+the eval runs in the week, each beside the last run before the week on the
+same cases, mode and k, with the change; and the notes read in the week by
+each reader, the person (`owner`) and each agent.
+
+Proposals carry no kind, so the report groups them by who made them: the
+actor on the `propose` line that named the proposal. A decision is joined to
+that line by the proposal's id; a proposal made before lines named their
+proposal is counted by the `author` its decision line carries, or, when it
+is still open, by the author git keeps on it, and `unknown` when nothing
+says, which a note under the table points out. Pending means made by the
+end of the week and not decided by then.
+
+The report is the owner's: it names every reader and every note. It prints
+to stdout; `--out` writes it, but only as a `.md` file inside the vault's
+`.noto/` (`.noto/reports/2026-W45.md`), so it is never indexed as a note and
+never overwrites a setting. Its folders are made one at a time inside a
+`.noto/` that is there, and a link on the way is refused.
 
 ## Indexing
 
