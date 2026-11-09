@@ -9,7 +9,7 @@ import path from 'node:path';
 import { loadAccess, type AccessPolicy, type Principal, type Sensitivity, type Verb } from './access.js';
 import { loadConfig, type BrainConfig, type Kind, type Source } from './config.js';
 import { addRelationLines, appendEntry, datedPath, relationWord } from './edit.js';
-import { ACTOR_NAME, EventLog, newSession, type EventVerb } from './events.js';
+import { ACTOR_NAME, EventLog, newSession, REASON_MAX, type EventVerb, type VaultEvent } from './events.js';
 import { splitFrontmatter } from './markdown.js';
 import { acceptProposal, createProposal, findRepo, listProposals, proposalDiff, proposalFile, rejectProposal, type AcceptResult, type FileChange, type GitRepo, type Proposal } from './git.js';
 import { refresh, type IndexContext, type RefreshStats } from './indexer.js';
@@ -99,6 +99,23 @@ export interface OpenOptions {
    * new; only an index that cannot be opened at all is deleted and made anew.
    */
   readonly rebuild?: boolean;
+}
+
+/** What the person may say about a decision on a proposal or a suggestion, for the record. */
+export interface ReviewOptions {
+  /** Why, in a word or a few. */
+  readonly reason?: string;
+  /** How long they looked at it before deciding, in milliseconds. */
+  readonly reviewMs?: number;
+}
+
+/** A review's fields as a record keeps them: a reason trimmed and cut short, a time in whole milliseconds; a time that is not one is refused. */
+export function reviewFields(review: ReviewOptions): { reason?: string; reviewMs?: number } {
+  const reason = review.reason?.trim().slice(0, REASON_MAX);
+  if (review.reviewMs !== undefined && !(Number.isFinite(review.reviewMs) && review.reviewMs >= 0)) {
+    throw new Error(`A review time is milliseconds, 0 or more; ${String(review.reviewMs)} is not.`);
+  }
+  return { ...(reason ? { reason } : {}), ...(review.reviewMs !== undefined ? { reviewMs: Math.round(review.reviewMs) } : {}) };
 }
 
 const sha = (data: string | Buffer): string => createHash('sha256').update(data).digest('hex');
@@ -230,7 +247,7 @@ export class Vault {
   }
 
   /** Record what one call did to these notes, as this vault's actor, in this sitting. */
-  recordEvent(verb: EventVerb, paths: readonly string[], extra: { query?: string; from?: string } = {}): void {
+  recordEvent(verb: EventVerb, paths: readonly string[], extra: Pick<VaultEvent, 'query' | 'from' | 'proposal' | 'author' | 'reason' | 'reviewMs'> = {}): void {
     if (paths.length === 0) return;
     try {
       this.events.record(paths.map((rel) => ({ actor: this.actor, verb, path: rel, session: this.session, ...extra })));
@@ -614,7 +631,7 @@ export class Vault {
       ? { name: 'owner', email: 'owner@noto.local' }
       : { name: this.principal.name, email: `${this.principal.name}@noto.local` };
     const { id } = createProposal(repo, this.root, clean, message.trim() || 'Proposed change', author);
-    this.recordEvent('propose', clean.map((change) => change.path));
+    this.recordEvent('propose', clean.map((change) => change.path), { proposal: id });
     return { id, files: clean.map((change) => change.path) };
   }
 
@@ -656,10 +673,13 @@ export class Vault {
     return this.repo !== null;
   }
 
-  accept(id: string): AcceptResult {
+  /** Bring a proposal into the working tree; `review` says why and after how long, for the record. */
+  accept(id: string, review: ReviewOptions = {}): AcceptResult {
     if (!this.principal.owner) throw new AccessError('Only the owner accepts proposals.');
+    const outcome = reviewFields(review);
     const repo = this.requireRepo();
-    const files = this.proposals().find((proposal) => proposal.id === id)?.files.map((file) => file.path) ?? [];
+    const proposal = this.proposals().find((item) => item.id === id);
+    const files = proposal?.files.map((file) => file.path) ?? [];
     // A proposal is a ref anyone with git can write, so what it may touch is
     // checked as it lands, not only when made: never the folder's settings
     // (.noto/access.yaml would let an agent grant itself more), its scripts,
@@ -669,16 +689,20 @@ export class Vault {
       throw new AccessError(`A proposal may not change ${settled.join(', ')}: settings and dot folders are changed by hand.`);
     }
     const result = acceptProposal(repo, this.root, id);
-    this.recordEvent(result.conflicts.length === 0 ? 'accept' : 'propose', files);
+    // A proposal that stays, for the conflicts, is not yet decided: the line names it, and the decision comes later.
+    if (result.conflicts.length === 0) this.recordEvent('accept', files, { proposal: id, ...(proposal ? { author: proposal.author } : {}), ...outcome });
+    else this.recordEvent('propose', files, { proposal: id });
     if (result.applied.length > 0) this.refresh({ paths: result.applied });
     return result;
   }
 
-  reject(id: string): void {
+  /** Drop a proposal; `review` says why and after how long, for the record. */
+  reject(id: string, review: ReviewOptions = {}): void {
     if (!this.principal.owner) throw new AccessError('Only the owner rejects proposals.');
-    const files = this.proposals().find((proposal) => proposal.id === id)?.files.map((file) => file.path) ?? [];
+    const outcome = reviewFields(review);
+    const proposal = this.proposals().find((item) => item.id === id);
     rejectProposal(this.requireRepo(), id);
-    this.recordEvent('reject', files);
+    this.recordEvent('reject', proposal?.files.map((file) => file.path) ?? [], { proposal: id, ...(proposal ? { author: proposal.author } : {}), ...outcome });
   }
 
 }

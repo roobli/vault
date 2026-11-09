@@ -136,6 +136,10 @@ Reads are not in git, so they are recorded. One JSON object per line in
 | `from` | the note this one was reached from, by a link; optional |
 | `query` | the cue, for `recall`; optional |
 | `repeat`, `until` | the same event this many times in a row, the first at `time` and the last at `until`; optional, one when absent |
+| `proposal` | the proposal's id, on `propose`, `accept` and `reject`; added later, so older lines lack it |
+| `author` | who made the proposal (its git author, read before the proposal goes), on `accept` and `reject` |
+| `reason` | why the person decided as they did, in a word or a few, when they said; at most 200 characters |
+| `reviewMs` | how long the person looked at it before deciding, in whole milliseconds, when the caller measured it |
 
 Files are per host, so two machines syncing the vault never conflict on them.
 Unknown fields are kept and ignored. The index reads each file from the byte
@@ -349,6 +353,16 @@ each file three ways (`git merge-file`: the file now, the base, the proposal)
 into the working tree, and stops on a conflict for that file. The person commits the result their usual way. Accepting or rejecting
 deletes the ref and records an event.
 
+These events are the ledger of what became of each proposal. The `propose`
+line names the proposal it made; an `accept` or `reject` names it again with
+its author, and, when the caller gives them, a `reason` and a `reviewMs`
+(`vault.accept(id, {reason, reviewMs})`, `proposals accept <id> --reason r
+--review-ms n`). An accept that stops on a conflict records a `propose` line
+naming the proposal, since it is not decided yet; the decision comes when it
+is accepted again or rejected. The fields were added to the lines without
+changing any other: a reader that does not know them reads the line as
+before.
+
 ## Suggestions
 
 `suggest` finds the links a vault is missing: a note that names another by
@@ -382,7 +396,12 @@ A no is a line in `.noto/dismissed.jsonl`:
 
 ```json
 {"type":"mention","from":"A/B.md","to":"C/D.md","time":"2026-11-05T10:45:40.247Z"}
+{"type":"mention","from":"A/E.md","to":"C/D.md","time":"2026-11-05T10:46:02.118Z","reason":"not a name here","reviewMs":2500}
 ```
+
+`reason` and `reviewMs` are there when the person gave them
+(`dismiss(vault, items, {reason, reviewMs})`, `suggest --dismiss <id...>
+--reason r --review-ms n`), with the same meaning as on a proposal's events.
 
 The file holds the type and both paths, not the id, so it reads without this
 package; a dismissal lapses when either note moves. `dismissals(vault)` lists

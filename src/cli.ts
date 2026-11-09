@@ -19,7 +19,7 @@ import { serve } from './mcp.js';
 import { recall } from './recall.js';
 import { dismiss, suggest, toChanges, type Suggestion, type SuggestionType } from './suggest.js';
 import { addAgent, revokeAgent } from './policy.js';
-import { AccessError, ConflictError, Vault } from './vault.js';
+import { AccessError, ConflictError, Vault, type ReviewOptions } from './vault.js';
 import { parseYaml } from './yaml.js';
 
 const HELP = `noto-vault: a vault of Markdown notes as memory
@@ -38,8 +38,8 @@ const HELP = `noto-vault: a vault of Markdown notes as memory
   noto-vault suggest                    links that are missing  [--types mention,together,stale,script] [--from note] [--limit n, also for --json]
   noto-vault suggest --review           go through them one by one: link it, never, skip; then apply the yes
   noto-vault suggest --propose [id...]  the named ones (or the strongest --limit) as a proposal  [--message m]
-  noto-vault suggest --dismiss <id...>  never suggest these again (kept in .noto/dismissed.jsonl)
-  noto-vault proposals [show|accept|reject <id>]
+  noto-vault suggest --dismiss <id...>  never suggest these again (kept in .noto/dismissed.jsonl)  [--reason r] [--review-ms n]
+  noto-vault proposals [show|accept|reject <id>]   accept and reject also take [--reason r] [--review-ms n], kept with the record
   noto-vault append <text...>           a dated entry in today's log  [--to note]   (text "-" reads stdin)
   noto-vault write <note> --base <hash> the note's new text from stdin  (--base new to create)
   noto-vault link <from> <to>           a typed relation line  [--rel related]
@@ -78,7 +78,7 @@ async function main(argv: string[]): Promise<number> {
       folder: { type: 'string' }, from: { type: 'string' }, budget: { type: 'string' }, out: { type: 'string' }, types: { type: 'string' },
       min: { type: 'string' }, propose: { type: 'boolean' }, review: { type: 'boolean' }, dismiss: { type: 'boolean' }, message: { type: 'string' }, to: { type: 'string' }, base: { type: 'string' },
       rel: { type: 'string' }, owner: { type: 'boolean' }, k: { type: 'string' }, search: { type: 'boolean' }, meta: { type: 'boolean' },
-      hook: { type: 'boolean' },
+      hook: { type: 'boolean' }, reason: { type: 'string' }, 'review-ms': { type: 'string' },
       help: { type: 'boolean', short: 'h' },
     },
   });
@@ -91,6 +91,12 @@ async function main(argv: string[]): Promise<number> {
   const print = (value: unknown, text: () => string) => console.log(json ? JSON.stringify(value, null, 2) : text());
   const number = (value: unknown, fallback?: number) => (typeof value === 'string' && value.trim() !== '' && Number.isFinite(Number(value)) ? Number(value) : fallback);
   const words = rest.join(' ').trim();
+  // What the person may say about a decision, for the record: why, and how long they looked.
+  const reviewOf = (): ReviewOptions => {
+    const ms = values['review-ms'];
+    if (ms !== undefined && (typeof ms !== 'string' || !/^\d+(\.\d+)?$/.test(ms.trim()))) throw new UsageError('--review-ms takes the milliseconds you looked before deciding, such as 4200.');
+    return { ...(typeof values.reason === 'string' ? { reason: values.reason } : {}), ...(typeof ms === 'string' ? { reviewMs: Number(ms) } : {}) };
+  };
 
   if (command === 'init') {
     const root = path.resolve(typeof values.root === 'string' ? values.root : process.cwd());
@@ -234,7 +240,7 @@ async function main(argv: string[]): Promise<number> {
         };
         if (values.dismiss) {
           if (rest.length === 0) throw new UsageError('suggest --dismiss needs the ids to dismiss.');
-          const count = dismiss(vault, named(rest));
+          const count = dismiss(vault, named(rest), reviewOf());
           console.log(`Dismissed ${count}; they will not be suggested again. The list is .noto/dismissed.jsonl.`);
           return 0;
         }
@@ -265,7 +271,7 @@ async function main(argv: string[]): Promise<number> {
         if (!id) throw new UsageError(`proposals ${action} needs an id.`);
         if (action === 'show') { console.log(vault.proposalDiff(id)); return 0; }
         if (action === 'accept') {
-          const result = vault.accept(id);
+          const result = vault.accept(id, reviewOf());
           print(result, () => [
             result.applied.length > 0 ? `Applied: ${result.applied.join(', ')}` : '',
             result.unchanged.length > 0 ? `Already so: ${result.unchanged.join(', ')}` : '',
@@ -273,7 +279,7 @@ async function main(argv: string[]): Promise<number> {
           ].filter(Boolean).join('\n'));
           return result.conflicts.length > 0 ? 1 : 0;
         }
-        if (action === 'reject') { vault.reject(id); console.log(`Rejected ${id}.`); return 0; }
+        if (action === 'reject') { vault.reject(id, reviewOf()); console.log(`Rejected ${id}.`); return 0; }
         throw new UsageError(`Unknown proposals action ${action}.`);
       }
       case 'append': {

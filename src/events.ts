@@ -42,6 +42,14 @@ export interface VaultEvent {
   readonly from?: string;
   /** The cue, for a recall. */
   readonly query?: string;
+  /** The proposal a `propose`, `accept` or `reject` is about. */
+  readonly proposal?: string;
+  /** Who made the proposal, on an `accept` or `reject`: its git author, read before the proposal goes. */
+  readonly author?: string;
+  /** Why the person decided as they did, in a word or a few, as they gave it. */
+  readonly reason?: string;
+  /** How long the person looked at it before deciding, in milliseconds, as they measured it. */
+  readonly reviewMs?: number;
   /** The same event this many times in a row, the first at `time` and the last at `until`; one when absent. */
   readonly repeat?: number;
   readonly until?: string;
@@ -55,6 +63,9 @@ export const REPEAT_MS = 60_000;
 
 /** The most rows one line stands for, its notes times its run: a reader cuts a line claiming more, so a writer never writes one. */
 export const EVENT_LINE_MAX = 1000;
+
+/** The most characters of a decision's reason a line keeps. */
+export const REASON_MAX = 200;
 
 /** A host name that is safe as a folder name. */
 export function hostName(): string {
@@ -73,7 +84,8 @@ function eventFile(root: string, host: string, time: Date): string {
 /** Everything but the path: events alike in this share a line. */
 const sameCall = (left: VaultEvent, right: VaultEvent): boolean =>
   left.time === right.time && left.actor === right.actor && left.verb === right.verb && left.session === right.session
-  && left.from === right.from && left.query === right.query && left.repeat === right.repeat && left.until === right.until;
+  && left.from === right.from && left.query === right.query && left.repeat === right.repeat && left.until === right.until
+  && left.proposal === right.proposal && left.author === right.author && left.reason === right.reason && left.reviewMs === right.reviewMs;
 
 function lineOf(events: readonly VaultEvent[], now: string): string {
   const first = events[0]!;
@@ -83,6 +95,10 @@ function lineOf(events: readonly VaultEvent[], now: string): string {
   if (first.session) line.session = first.session;
   if (first.from) line.from = first.from;
   if (first.query) line.query = first.query.slice(0, 500);
+  if (first.proposal) line.proposal = first.proposal;
+  if (first.author) line.author = first.author;
+  if (first.reason) line.reason = first.reason.slice(0, REASON_MAX);
+  if (first.reviewMs !== undefined && Number.isFinite(first.reviewMs) && first.reviewMs >= 0) line.reviewMs = Math.round(first.reviewMs);
   if (first.repeat !== undefined && first.repeat > 1) {
     line.repeat = Math.floor(first.repeat);
     if (first.until) line.until = first.until;
@@ -200,7 +216,8 @@ export class EventLog {
     if (events.length === 0) return true;
     const now = this.clock();
     const first = events[0]!;
-    const key = JSON.stringify([first.actor, first.verb, first.session ?? '', first.from ?? '', first.query ?? '', events.map((event) => event.path)]);
+    const key = JSON.stringify([first.actor, first.verb, first.session ?? '', first.from ?? '', first.query ?? '', first.proposal ?? '', first.author ?? '',
+      first.reason ?? '', first.reviewMs ?? '', events.map((event) => event.path)]);
     if (this.run && this.run.key === key && now - this.run.last <= this.repeatMs) {
       if (this.run.more === 0) this.run.firstMore = now;
       this.run.more += 1;

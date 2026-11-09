@@ -1,5 +1,5 @@
 export { Vault, AccessError, ConflictError, snippetOf } from './vault.js';
-export type { NoteRow, NoteHeat, ReadResult, SearchHit, SearchOptions, OpenOptions, GraphExport, GraphNode, GraphEdge } from './vault.js';
+export type { NoteRow, NoteHeat, ReadResult, SearchHit, SearchOptions, OpenOptions, ReviewOptions, GraphExport, GraphNode, GraphEdge } from './vault.js';
 export { about } from './about.js';
 export { folderAbout } from './folder.js';
 export { linkReaches, relink, relinkTokens } from './relink.js';
@@ -23,7 +23,7 @@ export { loadConfig, parseConfig, parseRecallConfig, recallConfigHash, DEFAULT_C
 export type { BrainConfig, Kind, RecallConfig, Source } from './config.js';
 export { loadAccess, parseAccess, keyHash, VERBS, SENSITIVITIES } from './access.js';
 export type { AccessPolicy, Principal, Sensitivity, Verb } from './access.js';
-export { ACTOR_NAME, agentActor, EventLog, hostName, newSession, recordEvent, recordEvents, REPEAT_MS } from './events.js';
+export { ACTOR_NAME, agentActor, EventLog, hostName, newSession, REASON_MAX, recordEvent, recordEvents, REPEAT_MS } from './events.js';
 export type { VaultEvent, EventVerb } from './events.js';
 export type { VaultScript, Derived, ScriptNote, ScriptContext, ScriptSuggestion } from './scripts.js';
 export type { FileChange, Proposal, AcceptResult } from './git.js';

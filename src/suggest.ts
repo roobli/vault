@@ -29,7 +29,7 @@ import { dirOf, nameOf } from './paths.js';
 import { buildResolveIndex, wikiLinkTo, type ResolveIndex } from './resolve.js';
 import { hasCjk } from './tokenize.js';
 import { scriptContext } from './scripts.js';
-import { AccessError, type Vault } from './vault.js';
+import { AccessError, reviewFields, type ReviewOptions, type Vault } from './vault.js';
 
 export type SuggestionType = 'mention' | 'together' | 'stale' | 'script';
 
@@ -207,13 +207,17 @@ const ownerOnly = (vault: Vault, what: string) => {
   if (!vault.principal.owner) throw new AccessError(`${vault.principal.name} may not ${what}; only the owner writes under .noto/.`);
 };
 
-/** Say no to suggestions, for good. Only the owner writes under `.noto/`. */
-export function dismiss(vault: Vault, items: readonly Suggestion[]): number {
+/**
+ * Say no to suggestions, for good; `review` says why and after how long, and
+ * each line keeps it. Only the owner writes under `.noto/`.
+ */
+export function dismiss(vault: Vault, items: readonly Suggestion[], review: ReviewOptions = {}): number {
   ownerOnly(vault, 'dismiss suggestions');
+  const outcome = reviewFields(review);
   const known = dismissedIds(vault.root);
   const time = new Date().toISOString();
   const lines = items.filter((item) => !known.has(item.id) && known.add(item.id))
-    .map((item) => JSON.stringify({ type: item.type, from: item.from, to: item.to, time }));
+    .map((item) => JSON.stringify({ type: item.type, from: item.from, to: item.to, time, ...outcome }));
   if (lines.length === 0) return 0;
   mkdirSync(path.dirname(dismissedPath(vault.root)), { recursive: true });
   appendFileSync(dismissedPath(vault.root), `${lines.join('\n')}\n`);
