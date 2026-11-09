@@ -19,8 +19,8 @@ export { resolveLink, buildResolveIndex, wikiLinkTo, aliasKey } from './resolve.
 export type { ResolveIndex, Resolution } from './resolve.js';
 export { parseYaml, parseYamlMap } from './yaml.js';
 export type { YamlValue } from './yaml.js';
-export { loadConfig, parseConfig, DEFAULT_CONFIG, KINDS, SOURCES } from './config.js';
-export type { BrainConfig, Kind, Source } from './config.js';
+export { loadConfig, parseConfig, parseRecallConfig, recallConfigHash, DEFAULT_CONFIG, DEFAULT_RECALL, KINDS, SOURCES } from './config.js';
+export type { BrainConfig, Kind, RecallConfig, Source } from './config.js';
 export { loadAccess, parseAccess, keyHash, VERBS, SENSITIVITIES } from './access.js';
 export type { AccessPolicy, Principal, Sensitivity, Verb } from './access.js';
 export { ACTOR_NAME, agentActor, EventLog, hostName, newSession, recordEvent, recordEvents, REPEAT_MS } from './events.js';

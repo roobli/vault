@@ -10,7 +10,7 @@
  * not return.
  */
 
-import type { Kind, Source } from './config.js';
+import type { Kind, RecallConfig, Source } from './config.js';
 import type { Sensitivity } from './access.js';
 import { decay } from './memory.js';
 import { aliasKey } from './resolve.js';
@@ -51,10 +51,9 @@ export interface RecallOptions {
    * it should not warm those notes every time a note is opened.
    */
   readonly record?: boolean;
+  /** The numbers to rank by, instead of the vault's `recall:` config; a shadow run compares two. */
+  readonly config?: RecallConfig;
 }
-
-const KIND_WEIGHT: Readonly<Record<Kind, number>> = { decision: 1.3, card: 1.2, note: 1, log: 0.85 };
-const SOURCE_WEIGHT: Readonly<Record<string, number>> = { lived: 1.15, seen: 1, heard: 0.85 };
 
 interface Row {
   nid: number; path: string; title: string; kind: Kind; source: Source | null; sensitivity: Sensitivity;
@@ -75,8 +74,9 @@ const RELATION_WORDS: Readonly<Record<string, string>> = {
 export function recall(vault: Vault, cue: string, options: RecallOptions = {}): RecallPack {
   vault.requireVerb('recall');
   const db = vault.store.db;
+  const tuning = options.config ?? vault.config.recall;
   const budget = options.budget ?? vault.config.budget.recallChars;
-  const limit = options.limit ?? 12;
+  const limit = options.limit ?? tuning.limit;
   const pieces = [...new Set([...queryPieces(cue), ...looseTerms(cue)])];
   const candidates = new Map<string, Candidate>();
   const rowOf = db.prepare('SELECT nid, path, title, kind, source, sensitivity, status, date, hash FROM notes WHERE path = ?');
@@ -85,7 +85,7 @@ export function recall(vault: Vault, cue: string, options: RecallOptions = {}): 
     const known = candidates.get(row.path);
     if (known) {
       if (!known.why.includes(why)) known.why.push(why);
-      known.relevance = Math.max(known.relevance, relevance) + Math.min(known.relevance, relevance) * 0.25;
+      known.relevance = Math.max(known.relevance, relevance) + Math.min(known.relevance, relevance) * tuning.merge;
     } else candidates.set(row.path, { row, relevance, why: [why] });
   };
 
@@ -93,11 +93,12 @@ export function recall(vault: Vault, cue: string, options: RecallOptions = {}): 
   const search = (mode: 'all' | 'loose', count: number) => {
     const expression = mode === 'all' ? matchExpression(cue, 'all') : looseExpression(cue) ?? matchExpression(cue, 'any');
     if (!expression) return [];
-    return db.prepare(`SELECT n.nid, n.path, n.title, n.kind, n.source, n.sensitivity, n.status, n.date, n.hash, bm25(fts, 8.0, 3.0, 1.0) AS rank
-      FROM fts JOIN notes n ON n.nid = fts.rowid WHERE fts MATCH ? ORDER BY rank LIMIT ?`).all(expression, count) as unknown as (Row & { rank: number })[];
+    const { title, path, body } = tuning.bm25;
+    return db.prepare(`SELECT n.nid, n.path, n.title, n.kind, n.source, n.sensitivity, n.status, n.date, n.hash, bm25(fts, ?, ?, ?) AS rank
+      FROM fts JOIN notes n ON n.nid = fts.rowid WHERE fts MATCH ? ORDER BY rank LIMIT ?`).all(title, path, body, expression, count) as unknown as (Row & { rank: number })[];
   };
   // An agent's hidden notes must not crowd out what it can see.
-  const any = search('loose', vault.principal.owner ? 80 : 600);
+  const any = search('loose', vault.principal.owner ? tuning.textCandidates : tuning.textCandidatesShared);
   const best = any.length > 0 ? -any[0]!.rank : 1;
   // A title is the note's own summary: the share of the cue's words it holds counts on top.
   const terms = looseTerms(cue);
@@ -108,25 +109,25 @@ export function recall(vault: Vault, cue: string, options: RecallOptions = {}): 
   };
   for (const row of any) {
     const share = titleShare(row);
-    offer(row, Math.max(0.05, -row.rank / best) + 0.6 * share, share >= 0.5 ? 'the title answers the cue' : 'matches the cue');
+    offer(row, Math.max(tuning.textFloor, -row.rank / best) + tuning.titleShare * share, share >= 0.5 ? 'the title answers the cue' : 'matches the cue');
   }
-  for (const row of search('all', 40)) offer(row, 0.35, 'matches every word of the cue');
+  for (const row of search('all', tuning.allWordsCandidates)) offer(row, tuning.allWords, 'matches every word of the cue');
 
   // Seeds: the cue is a title, an id or an alias.
   const exact = db.prepare(`SELECT n.nid, n.path, n.title, n.kind, n.source, n.sensitivity, n.status, n.date, n.hash FROM notes n
     WHERE lower(n.title) = lower(?) UNION SELECT n.nid, n.path, n.title, n.kind, n.source, n.sensitivity, n.status, n.date, n.hash
     FROM aliases a JOIN notes n ON n.path = a.path WHERE a.key = ?`).all(cue.trim(), aliasKey(cue)) as unknown as Row[];
-  for (const row of exact) offer(row, 1.2, 'named by the cue');
+  for (const row of exact) offer(row, tuning.named, 'named by the cue');
 
   // Seeds: where the caller is, and what is around it.
   const from = options.from ? vault.find(options.from) : null;
-  if (from) offer(rowOf.get(from.path) as Row | undefined, 0.6, 'the note you are in');
+  if (from) offer(rowOf.get(from.path) as Row | undefined, tuning.from, 'the note you are in');
 
   // One hop from the best seeds, along links, relations and association.
   const now = Date.now();
   const weightsAt = Number(vault.store.meta('weights_at') ?? now);
   const half: Record<string, number> = { visit: vault.config.halfLife.visit, co_change: vault.config.halfLife.coChange };
-  const seeds = [...candidates.values()].sort((left, right) => right.relevance - left.relevance).slice(0, 10);
+  const seeds = [...candidates.values()].sort((left, right) => right.relevance - left.relevance).slice(0, tuning.hopSeeds);
   const outLinks = db.prepare(`SELECT DISTINCT resolved AS other, relation FROM links WHERE src = ? AND resolved IS NOT NULL AND kind != 'img'`);
   const inLinks = db.prepare(`SELECT DISTINCT src AS other, relation FROM links WHERE resolved = ? AND kind != 'img'`);
   const associated = db.prepare(`SELECT CASE WHEN a = ? THEN b ELSE a END AS other, type, weight, count FROM edges WHERE a = ? OR b = ?`);
@@ -134,19 +135,19 @@ export function recall(vault: Vault, cue: string, options: RecallOptions = {}): 
     const base = seed.relevance;
     const title = seed.row.title;
     for (const link of outLinks.all(seed.row.path) as { other: string; relation: string | null }[]) {
-      const strength = link.relation ? 0.6 : 0.4;
+      const strength = link.relation ? tuning.hop.relationOut : tuning.hop.linkOut;
       offer(rowOf.get(link.other) as Row | undefined, base * strength,
         link.relation ? `"${title}" is ${RELATION_WORDS[link.relation] ?? link.relation} this` : `linked from "${title}"`);
     }
     for (const link of inLinks.all(seed.row.path) as { other: string; relation: string | null }[]) {
-      const strength = link.relation ? 0.55 : 0.3;
+      const strength = link.relation ? tuning.hop.relationIn : tuning.hop.linkIn;
       offer(rowOf.get(link.other) as Row | undefined, base * strength,
         link.relation ? `${RELATION_WORDS[link.relation] ?? link.relation} "${title}"` : `links to "${title}"`);
     }
     for (const edge of associated.all(seed.row.path, seed.row.path, seed.row.path) as { other: string; type: string; weight: number; count: number }[]) {
       const weight = edge.weight * decay(now - weightsAt, half[edge.type] ?? 60);
-      const strength = 0.45 * (weight / (1 + weight));
-      if (strength < 0.05) continue;
+      const strength = tuning.hop.edge * (weight / (1 + weight));
+      if (strength < tuning.hop.edgeFloor) continue;
       offer(rowOf.get(edge.other) as Row | undefined, base * strength,
         edge.type === 'visit' ? `often opened with "${title}"` : `often changed with "${title}"`);
     }
@@ -157,8 +158,9 @@ export function recall(vault: Vault, cue: string, options: RecallOptions = {}): 
     const { row } = candidate;
     const heat = vault.heatOf(row.path, now).heat;
     const superseded = vault.isSuperseded(row.path);
-    const status = superseded ? 0.35 : row.status === 'archived' ? 0.8 : 1;
-    const score = candidate.relevance * KIND_WEIGHT[row.kind] * (1 + 0.15 * Math.log1p(heat)) * (SOURCE_WEIGHT[row.source ?? ''] ?? 1) * status;
+    const status = superseded ? tuning.statusWeight.superseded : row.status === 'archived' ? tuning.statusWeight.archived : 1;
+    const source = row.source ? tuning.sourceWeight[row.source] ?? 1 : 1;
+    const score = candidate.relevance * tuning.kindWeight[row.kind] * (1 + tuning.heat * Math.log1p(heat)) * source * status;
     return { ...candidate, score, superseded };
   }).sort((left, right) => right.score - left.score);
 
@@ -175,7 +177,7 @@ export function recall(vault: Vault, cue: string, options: RecallOptions = {}): 
     }
     hashes.add(candidate.row.hash);
     chosen.push(candidate);
-    if (chosen.length >= limit * 2) break;
+    if (chosen.length >= limit * tuning.pool) break;
   }
 
   // Pack: the first items get more room.

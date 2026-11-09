@@ -42,6 +42,46 @@ budget:
 
 append:
   path: "inbox/{yyyy}-{mm}-{dd}.md"
+
+# How recall ranks, at its defaults. Weights are numbers of 0 or more; counts
+# are whole numbers, 0 switching that source of candidates off. A value out
+# of range keeps its default. A note's score is its relevance times
+# kind_weight, times 1 + heat * ln(1 + the note's heat), times source_weight
+# (1 when unknown), times status_weight.
+recall:
+  kind_weight: {decision: 1.3, card: 1.2, note: 1, log: 0.85}
+  source_weight: {lived: 1.15, seen: 1, heard: 0.85}
+  status_weight: {superseded: 0.35, archived: 0.8}
+  heat: 0.15
+  # Notes in a pack when the caller does not say (at least 1), and candidates
+  # kept per note the pack may hold (at least 1).
+  limit: 12
+  pool: 2
+  # Full-text matches read: for the owner, and for anyone else, whose hidden
+  # notes must not crowd out what it can see.
+  text_candidates: 80
+  text_candidates_shared: 600
+  # BM25 weights of the title, the path and the body.
+  bm25: {title: 8, path: 3, body: 1}
+  # A full-text match's relevance is its BM25 score as a share of the best,
+  # at least text_floor, plus title_share times the share of the cue's words
+  # in its title.
+  text_floor: 0.05
+  title_share: 0.6
+  # Matches of every word of the cue read, and the relevance each gets.
+  all_words_candidates: 40
+  all_words: 0.35
+  # Relevance of a note the cue names (title, id, alias), and of the note you are in.
+  named: 1.2
+  from: 0.6
+  # A note reached a second way gains this share of the weaker relevance.
+  merge: 0.25
+  # One hop goes out from the best hop_seeds, passing this share of a seed's
+  # relevance along a plain link or a typed relation, out of the seed or into
+  # it; an edge of decayed weight w passes edge * w / (1 + w), and is not
+  # followed below edge_floor.
+  hop_seeds: 10
+  hop: {link_out: 0.4, relation_out: 0.6, link_in: 0.3, relation_in: 0.55, edge: 0.45, edge_floor: 0.05}
 `;
 
 export const ACCESS_TEMPLATE = `# Who may read and write what. The owner (you, at this CLI) may do anything.

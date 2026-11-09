@@ -232,6 +232,41 @@ why it was chosen, and an excerpt, until the budget (characters) is spent.
 
 Recall is lazy: it records a `recall` event only for the notes it returns.
 
+Every number above can be tuned under `recall:` in `brain.yaml`. Each key is
+optional and defaults to the value recall has always used. A weight is a
+number of 0 or more; a count is a whole number, and 0 switches that source of
+candidates off; `limit` and `pool` are at least 1. A value out of range, or
+an unknown key, is ignored, as elsewhere in the config. Editing the section
+changes the config's fingerprint, so the index is refreshed in full on the
+next open, as for any config edit.
+
+| key | meaning | default |
+| --- | --- | --- |
+| `kind_weight` | score factor per kind | `{decision: 1.3, card: 1.2, note: 1, log: 0.85}` |
+| `source_weight` | score factor per `known`; 1 when unknown | `{lived: 1.15, seen: 1, heard: 0.85}` |
+| `status_weight` | score factor for a superseded note, and an `archived` one | `{superseded: 0.35, archived: 0.8}` |
+| `heat` | the score is multiplied by `1 + heat ln(1 + note heat)` | 0.15 |
+| `limit` | notes in a pack when the caller does not say | 12 |
+| `pool` | candidates kept per note the pack may hold | 2 |
+| `text_candidates` | full-text matches read for the owner | 80 |
+| `text_candidates_shared` | the same for anyone else, whose hidden notes must not crowd out the rest | 600 |
+| `bm25` | BM25 weights of the title, path and body | `{title: 8, path: 3, body: 1}` |
+| `text_floor` | the least relevance of a full-text match, as a share of the best | 0.05 |
+| `title_share` | added per share of the cue's words in the title | 0.6 |
+| `all_words_candidates` | matches of every word of the cue read | 40 |
+| `all_words` | the relevance each of them gets | 0.35 |
+| `named` | relevance of a note the cue names by title, id or alias | 1.2 |
+| `from` | relevance of the note the caller is in | 0.6 |
+| `merge` | a note reached a second way gains this share of the weaker relevance | 0.25 |
+| `hop_seeds` | the best seeds one hop goes out from | 10 |
+| `hop.link_out`, `hop.relation_out` | share of a seed's relevance passed to what it links to, plainly or by a typed relation | 0.4, 0.6 |
+| `hop.link_in`, `hop.relation_in` | the same, to what links to it | 0.3, 0.55 |
+| `hop.edge` | an association edge of decayed weight `w` passes `edge w / (1 + w)` | 0.45 |
+| `hop.edge_floor` | an edge passing less is not followed | 0.05 |
+
+The sizes of excerpts (900 characters for the first three notes, 400 after,
+none under 120) shape the pack, not the ranking, and are not tuned here.
+
 ## Access
 
 `access.yaml` names principals. The owner is the person; the CLI acts as the
