@@ -5,6 +5,7 @@
  * defaults below.
  */
 
+import { createHash } from 'node:crypto';
 import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { DEFAULT_RELATIONS } from './markdown.js';
@@ -62,7 +63,82 @@ export interface BrainConfig {
   };
   /** The heading a relation list gets when one is added to a note; empty for none. */
   readonly relationsHeading: string;
+  /** Every number that shapes how recall ranks and how many candidates it weighs. */
+  readonly recall: RecallConfig;
 }
+
+/**
+ * `recall:` in `brain.yaml`. Weights are non-negative numbers; counts are
+ * whole numbers, zero switching that source of candidates off. A value out
+ * of range is ignored, as elsewhere in the config, and the default holds.
+ */
+export interface RecallConfig {
+  /** Score factor per kind (`kind_weight`). */
+  readonly kindWeight: Readonly<Record<Kind, number>>;
+  /** Score factor per way of knowing (`source_weight`); a note whose source is unknown gets 1. */
+  readonly sourceWeight: Readonly<Record<Source, number>>;
+  /** Score factor for a superseded note, and for one whose status is `archived` (`status_weight`). */
+  readonly statusWeight: { readonly superseded: number; readonly archived: number };
+  /** The score is multiplied by `1 + heat * ln(1 + the note's heat)` (`heat`). */
+  readonly heat: number;
+  /** Notes in a pack when the caller does not say (`limit`, at least 1). */
+  readonly limit: number;
+  /** Candidates kept for the pack, per note it may hold (`pool`, at least 1); the rest are never weighed for it. */
+  readonly pool: number;
+  /** Full-text matches read for the owner (`text_candidates`). */
+  readonly textCandidates: number;
+  /** The same for anyone else, whose hidden notes must not crowd out what it can see (`text_candidates_shared`). */
+  readonly textCandidatesShared: number;
+  /** BM25 weights of the title, path and body columns (`bm25`). */
+  readonly bm25: { readonly title: number; readonly path: number; readonly body: number };
+  /** The least relevance a full-text match gets, as a share of the best (`text_floor`). */
+  readonly textFloor: number;
+  /** Added per share of the cue's words the title holds (`title_share`). */
+  readonly titleShare: number;
+  /** Matches of every word of the cue read (`all_words_candidates`), and the relevance each gets (`all_words`). */
+  readonly allWordsCandidates: number;
+  readonly allWords: number;
+  /** Relevance of a note the cue names by title, id or alias (`named`). */
+  readonly named: number;
+  /** Relevance of the note the caller is in (`from`). */
+  readonly from: number;
+  /** A note reached a second way gains this share of the weaker relevance (`merge`). */
+  readonly merge: number;
+  /** The best seeds one hop goes out from (`hop_seeds`). */
+  readonly hopSeeds: number;
+  /** Share of a seed's relevance passed along each kind of link (`hop`). */
+  readonly hop: {
+    readonly linkOut: number;
+    readonly relationOut: number;
+    readonly linkIn: number;
+    readonly relationIn: number;
+    /** An association edge of decayed weight `w` passes `edge * w / (1 + w)`. */
+    readonly edge: number;
+    /** An edge passing less than this share is not followed. */
+    readonly edgeFloor: number;
+  };
+}
+
+export const DEFAULT_RECALL: RecallConfig = {
+  kindWeight: { decision: 1.3, card: 1.2, note: 1, log: 0.85 },
+  sourceWeight: { lived: 1.15, seen: 1, heard: 0.85 },
+  statusWeight: { superseded: 0.35, archived: 0.8 },
+  heat: 0.15,
+  limit: 12,
+  pool: 2,
+  textCandidates: 80,
+  textCandidatesShared: 600,
+  bm25: { title: 8, path: 3, body: 1 },
+  textFloor: 0.05,
+  titleShare: 0.6,
+  allWordsCandidates: 40,
+  allWords: 0.35,
+  named: 1.2,
+  from: 0.6,
+  merge: 0.25,
+  hopSeeds: 10,
+  hop: { linkOut: 0.4, relationOut: 0.6, linkIn: 0.3, relationIn: 0.55, edge: 0.45, edgeFloor: 0.05 },
+};
 
 export const DEFAULT_CONFIG: BrainConfig = {
   ignore: [],
@@ -84,10 +160,15 @@ export const DEFAULT_CONFIG: BrainConfig = {
   budget: { dailyReviews: 10, recallChars: 6000 },
   append: { path: 'inbox/{yyyy}-{mm}-{dd}.md' },
   relationsHeading: '',
+  recall: DEFAULT_RECALL,
 };
 
 const num = (value: YamlValue | undefined, fallback: number): number =>
   typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : fallback;
+const weight = (value: YamlValue | undefined, fallback: number): number =>
+  typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : fallback;
+const count = (value: YamlValue | undefined, fallback: number, least = 0): number =>
+  typeof value === 'number' && Number.isInteger(value) && value >= least ? value : fallback;
 const str = (value: YamlValue | undefined, fallback: string): string =>
   typeof value === 'string' ? value : fallback;
 const strs = (value: YamlValue | undefined, fallback: readonly string[]): readonly string[] =>
@@ -142,5 +223,56 @@ export function parseConfig(text: string): BrainConfig {
     budget: { dailyReviews: num(budget.daily_reviews, d.budget.dailyReviews), recallChars: num(budget.recall_chars, d.budget.recallChars) },
     append: { path: str(append.path, d.append.path) },
     relationsHeading: str(raw.relations_heading, d.relationsHeading),
+    recall: parseRecallConfig(raw.recall),
   };
+}
+
+/**
+ * A `recall:` section over `base`: what it says in range, and `base` for the
+ * rest. The vault's config reads it over the defaults; a shadow file is read
+ * over the vault's config, so it names only what it changes.
+ */
+export function parseRecallConfig(section: YamlValue | undefined, base: RecallConfig = DEFAULT_RECALL): RecallConfig {
+  const raw = map(section);
+  const kinds = map(raw.kind_weight);
+  const sources = map(raw.source_weight);
+  const status = map(raw.status_weight);
+  const bm25 = map(raw.bm25);
+  const hop = map(raw.hop);
+  return {
+    kindWeight: Object.fromEntries(KINDS.map((kind) => [kind, weight(kinds[kind], base.kindWeight[kind])])) as Record<Kind, number>,
+    sourceWeight: Object.fromEntries(SOURCES.map((source) => [source, weight(sources[source], base.sourceWeight[source])])) as Record<Source, number>,
+    statusWeight: { superseded: weight(status.superseded, base.statusWeight.superseded), archived: weight(status.archived, base.statusWeight.archived) },
+    heat: weight(raw.heat, base.heat),
+    limit: count(raw.limit, base.limit, 1),
+    pool: count(raw.pool, base.pool, 1),
+    textCandidates: count(raw.text_candidates, base.textCandidates),
+    textCandidatesShared: count(raw.text_candidates_shared, base.textCandidatesShared),
+    bm25: { title: weight(bm25.title, base.bm25.title), path: weight(bm25.path, base.bm25.path), body: weight(bm25.body, base.bm25.body) },
+    textFloor: weight(raw.text_floor, base.textFloor),
+    titleShare: weight(raw.title_share, base.titleShare),
+    allWordsCandidates: count(raw.all_words_candidates, base.allWordsCandidates),
+    allWords: weight(raw.all_words, base.allWords),
+    named: weight(raw.named, base.named),
+    from: weight(raw.from, base.from),
+    merge: weight(raw.merge, base.merge),
+    hopSeeds: count(raw.hop_seeds, base.hopSeeds),
+    hop: {
+      linkOut: weight(hop.link_out, base.hop.linkOut),
+      relationOut: weight(hop.relation_out, base.hop.relationOut),
+      linkIn: weight(hop.link_in, base.hop.linkIn),
+      relationIn: weight(hop.relation_in, base.hop.relationIn),
+      edge: weight(hop.edge, base.hop.edge),
+      edgeFloor: weight(hop.edge_floor, base.hop.edgeFloor),
+    },
+  };
+}
+
+/** A short hash of a recall config, so measurements made under different numbers can be told apart. */
+export function recallConfigHash(config: RecallConfig): string {
+  // Keys sorted at every level, so the same numbers hash the same however the object was built.
+  const canonical = (value: unknown): unknown => (value !== null && typeof value === 'object'
+    ? Object.fromEntries(Object.entries(value).sort(([left], [right]) => (left < right ? -1 : 1)).map(([key, item]) => [key, canonical(item)]))
+    : value);
+  return createHash('sha256').update(JSON.stringify(canonical(config))).digest('hex').slice(0, 8);
 }

@@ -28,6 +28,8 @@ rebuilds it from the files.
     scripts/*.mjs       the vault's own rules, as hooks (tracked)
     events/<host>/<yyyy-mm>.jsonl   reads and visits, append-only (tracked by choice)
     dismissed.jsonl     suggestions the person said no to (tracked)
+    eval/runs/<host>.jsonl   each eval run's scores, append-only (tracked by choice)
+    reports/<week>.md   weekly reports, when written there (tracked by choice)
     index.sqlite        the index (ignored; delete it at any time)
 ```
 
@@ -136,6 +138,10 @@ Reads are not in git, so they are recorded. One JSON object per line in
 | `from` | the note this one was reached from, by a link; optional |
 | `query` | the cue, for `recall`; optional |
 | `repeat`, `until` | the same event this many times in a row, the first at `time` and the last at `until`; optional, one when absent |
+| `proposal` | the proposal's id, on `propose`, `accept` and `reject`; added later, so older lines lack it |
+| `author` | who made the proposal (its git author, read before the proposal goes), on `accept` and `reject` |
+| `reason` | why the person decided as they did, in a word or a few, when they said; at most 200 characters |
+| `reviewMs` | how long the person looked at it before deciding, in whole milliseconds, when the caller measured it |
 
 Files are per host, so two machines syncing the vault never conflict on them.
 Unknown fields are kept and ignored. The index reads each file from the byte
@@ -169,7 +175,8 @@ thought, and Note Info lists every reader by name):
   the agent that says so in its environment: Claude Code sets `CLAUDECODE=1`
   (`claude-code`, one session per `CLAUDE_CODE_SESSION_ID`), Codex sets
   `CODEX_THREAD_ID` (`codex`). Otherwise it is `owner`.
-- `noto-vault eval` measures recall and records nothing.
+- `noto-vault eval` measures recall and records no reads; it keeps its
+  scores in a ledger of its own (below).
 
 What an agent writes by editing files itself reaches the index only through
 git, which cannot say who made a change. `noto-vault record <verb> <path...>`
@@ -231,6 +238,82 @@ why it was chosen, and an excerpt, until the budget (characters) is spent.
 5. Excerpts: the paragraphs around the matches, or the head of the note.
 
 Recall is lazy: it records a `recall` event only for the notes it returns.
+
+Every number above can be tuned under `recall:` in `brain.yaml`. Each key is
+optional and defaults to the value recall has always used. A weight is a
+number of 0 or more; a count is a whole number, and 0 switches that source of
+candidates off; `limit` and `pool` are at least 1. A value out of range, or
+an unknown key, is ignored, as elsewhere in the config. Editing the section
+changes the config's fingerprint, so the index is refreshed in full on the
+next open, as for any config edit.
+
+| key | meaning | default |
+| --- | --- | --- |
+| `kind_weight` | score factor per kind | `{decision: 1.3, card: 1.2, note: 1, log: 0.85}` |
+| `source_weight` | score factor per `known`; 1 when unknown | `{lived: 1.15, seen: 1, heard: 0.85}` |
+| `status_weight` | score factor for a superseded note, and an `archived` one | `{superseded: 0.35, archived: 0.8}` |
+| `heat` | the score is multiplied by `1 + heat ln(1 + note heat)` | 0.15 |
+| `limit` | notes in a pack when the caller does not say | 12 |
+| `pool` | candidates kept per note the pack may hold | 2 |
+| `text_candidates` | full-text matches read for the owner | 80 |
+| `text_candidates_shared` | the same for anyone else, whose hidden notes must not crowd out the rest | 600 |
+| `bm25` | BM25 weights of the title, path and body | `{title: 8, path: 3, body: 1}` |
+| `text_floor` | the least relevance of a full-text match, as a share of the best | 0.05 |
+| `title_share` | added per share of the cue's words in the title | 0.6 |
+| `all_words_candidates` | matches of every word of the cue read | 40 |
+| `all_words` | the relevance each of them gets | 0.35 |
+| `named` | relevance of a note the cue names by title, id or alias | 1.2 |
+| `from` | relevance of the note the caller is in | 0.6 |
+| `merge` | a note reached a second way gains this share of the weaker relevance | 0.25 |
+| `hop_seeds` | the best seeds one hop goes out from | 10 |
+| `hop.link_out`, `hop.relation_out` | share of a seed's relevance passed to what it links to, plainly or by a typed relation | 0.4, 0.6 |
+| `hop.link_in`, `hop.relation_in` | the same, to what links to it | 0.3, 0.55 |
+| `hop.edge` | an association edge of decayed weight `w` passes `edge w / (1 + w)` | 0.45 |
+| `hop.edge_floor` | an edge passing less is not followed | 0.05 |
+
+The sizes of excerpts (900 characters for the first three notes, 400 after,
+none under 120) shape the pack, not the ranking, and are not tuned here.
+
+A change of numbers can be tried before it is made. `recall <cue> --shadow
+file.yaml` and `eval <cases> --shadow file.yaml` read the `recall:` section
+of that file over the vault's own, so it names only what it changes, and
+run under both, recording nothing: no recall event, no eval run. Recall
+prints both packs side by side, place by place, with each of the shadow's
+notes' move (`+2` up, `-1` down, `=`, `new`) and the notes the shadow left
+out. Eval prints both score sets and their change, and each case whose first
+expected note moved, saying which gained a hit in the top k and which lost
+one. `--json` gives `shadowRecall()` and `shadowEval()` as they return. A
+file without a `recall:` section is refused, and `--shadow` with `--search`,
+which ranks by no recall config, is too.
+
+### Measuring recall
+
+`noto-vault eval <cases.yaml>` (`evaluate(vault, file, {k, search, config,
+record})`) asks recall each case's query, without recording a read, and
+scores the top `k` against the notes the case expects: hit@k (the share of
+cases with an expected note in the top k), recall, MRR, and the share whose
+first note is an expected one. Each run appends one line to
+`.noto/eval/runs/<host>.jsonl`, unless `--no-record` (`record: false`). Only
+the owner's runs are kept: another principal ranks over its own view, so its
+scores are not the owner's series, and an agent must not move the numbers
+the owner reads; its run is measured and shown, not kept. The folders are
+made one at a time inside a `.noto/` that is there, as for the events, and
+lines are never changed.
+
+```json
+{"time":"2026-11-09T09:00:00.000Z","actor":"owner","file":"eval/cases.yaml","mode":"recall","queries":40,"k":5,"hitAtK":0.85,"mrr":0.71,"firstHit":0.62,"schema":4,"config":"3f0c9a1b","version":"0.1.0"}
+```
+
+| field | meaning |
+| --- | --- |
+| `time`, `actor` | when, and who ran it, as for an event |
+| `file` | the cases file, from the vault's root |
+| `mode` | `recall`, or `search` with `--search` |
+| `queries`, `k` | how many cases were scored, and at how many notes |
+| `hitAtK`, `mrr`, `firstHit` | the scores, each from 0 to 1 |
+| `schema` | the index schema version |
+| `config` | the first eight hex digits of the SHA-256 of the recall config ranked by, its keys sorted, so runs under different numbers can be told apart |
+| `version` | this package's version |
 
 ## Access
 
@@ -314,6 +397,16 @@ each file three ways (`git merge-file`: the file now, the base, the proposal)
 into the working tree, and stops on a conflict for that file. The person commits the result their usual way. Accepting or rejecting
 deletes the ref and records an event.
 
+These events are the ledger of what became of each proposal. The `propose`
+line names the proposal it made; an `accept` or `reject` names it again with
+its author, and, when the caller gives them, a `reason` and a `reviewMs`
+(`vault.accept(id, {reason, reviewMs})`, `proposals accept <id> --reason r
+--review-ms n`). An accept that stops on a conflict records a `propose` line
+naming the proposal, since it is not decided yet; the decision comes when it
+is accepted again or rejected. The fields were added to the lines without
+changing any other: a reader that does not know them reads the line as
+before.
+
 ## Suggestions
 
 `suggest` finds the links a vault is missing: a note that names another by
@@ -347,7 +440,12 @@ A no is a line in `.noto/dismissed.jsonl`:
 
 ```json
 {"type":"mention","from":"A/B.md","to":"C/D.md","time":"2026-11-05T10:45:40.247Z"}
+{"type":"mention","from":"A/E.md","to":"C/D.md","time":"2026-11-05T10:46:02.118Z","reason":"not a name here","reviewMs":2500}
 ```
+
+`reason` and `reviewMs` are there when the person gave them
+(`dismiss(vault, items, {reason, reviewMs})`, `suggest --dismiss <id...>
+--reason r --review-ms n`), with the same meaning as on a proposal's events.
 
 The file holds the type and both paths, not the id, so it reads without this
 package; a dismissal lapses when either note moves. `dismissals(vault)` lists
@@ -394,7 +492,7 @@ Every write names its author. A direct write requires the principal's scope;
 anything else must be proposed.
 
 Besides the verbs, the CLI has views over the same index that change nothing:
-`backlinks`, `where`, `graph`, `suggest`, and `about`. `about <note>` (with
+`backlinks`, `where`, `graph`, `suggest`, `about`, and `report`. `about <note>` (with
 `--json`, the `AboutNote` that `about()` returns) is what a pane beside a note
 in an editor shows: where its kind, known and sensitivity came from; its heat;
 what supersedes it; the notes that link here; the notes it names without a
@@ -409,6 +507,36 @@ among the agents; the reads per day and the together weights count everyone,
 as heat, recall and suggest already do. It runs on every note switch, so it reads the index by the note's
 own keys; the name matcher behind the mentions is kept by an open vault
 until the index marks a change of names with a new `names` token in its meta table.
+
+`report [--week 2026-W45] [--out file]` (`weeklyReport(vault, {week})`) is
+a week of the vault as plain Markdown, headings and short tables and no
+HTML, so it reads the same in a terminal, Typora and GitHub. It is built
+from the index, the event logs, the eval ledger and the open proposals, with
+no model and no network, and gives the same text for the same vault and
+week; weeks are ISO weeks in UTC, this week when not given. It has the notes
+by kind; the broken links, as `status` counts them, and the notes other than
+logs that link nowhere and that nothing links to, each with its count and
+the first 20; the proposals made, accepted, rejected and pending in the
+week, with the accept rate and the median `reviewMs` where one was given;
+the eval runs in the week, each beside the last run before the week on the
+same cases, mode and k, with the change; and the notes read in the week by
+each reader, the person (`owner`) and each agent.
+
+Proposals carry no kind, so the report groups them by who made them: the
+actor on the `propose` line that named the proposal. A decision is joined to
+that line by the proposal's id; a proposal made before lines named their
+proposal is counted by the `author` its decision line carries, or, when it
+is still open, by the author git keeps on it, and `unknown` when nothing
+says, which a note under the table points out. Pending means made by the
+end of the week and not decided by then.
+
+The report is the owner's: it names every reader and every note. It prints
+to stdout; `--out` writes it, but only as a `.md` file inside the vault's
+`.noto/` (`.noto/reports/2026-W45.md`), so it is never indexed as a note and
+never overwrites a setting. Its folders are made one at a time inside a
+`.noto/` that is there, and a link on the way is refused, one whose target
+is missing included. A relative `--out` is read from the vault, and a vault
+reached through a link takes the path it suggests.
 
 ## Indexing
 

@@ -2,6 +2,7 @@
 
 import type { AboutNote } from './about.js';
 import type { RecallPack } from './recall.js';
+import type { ShadowEval, ShadowRecall } from './shadow.js';
 import type { Suggestion } from './suggest.js';
 import type { ReadResult, SearchHit } from './vault.js';
 
@@ -85,4 +86,59 @@ export function formatSuggestion(item: Suggestion, emphasis: Emphasis = plainEmp
 export function formatSuggestions(items: readonly Suggestion[], emphasis: Emphasis = plainEmphasis): string {
   if (items.length === 0) return 'No links seem to be missing.';
   return items.map((item, index) => `${index + 1}. ${formatSuggestion(item, emphasis)}`).join('\n');
+}
+
+/** A rank change as a person reads it: up is +, down is -, a note only the shadow has is new. */
+const moveOf = (current: number | null, shadow: number | null): string =>
+  current === null ? 'new' : shadow === null ? 'out' : current === shadow ? '=' : current > shadow ? `+${current - shadow}` : `-${shadow - current}`;
+
+/** Both packs side by side, place by place, and how each of the shadow's notes moved. */
+export function formatShadowRecall(result: ShadowRecall): string {
+  const rows = Math.max(result.current.items.length, result.shadow.items.length);
+  const head = `Recall for "${result.cue}": current config ${result.configs.current}, shadow ${result.configs.shadow}`;
+  if (rows === 0) return `${head}\n\nNothing came up under either.`;
+  const width = Math.max(7, ...[...result.current.items, ...result.shadow.items].map((item) => item.path.length));
+  const pad = (text: string) => text.padEnd(width);
+  const lines = [head, '', `  #   ${pad('current')}  ${pad('shadow')}  move`];
+  for (let index = 0; index < rows; index += 1) {
+    const now = result.current.items[index];
+    const then = result.shadow.items[index];
+    const move = then ? result.moves.find((entry) => entry.path === then.path) : undefined;
+    lines.push(`  ${String(index + 1).padEnd(3)} ${pad(now?.path ?? '')}  ${pad(then?.path ?? '')}  ${move ? moveOf(move.current, move.shadow) : ''}`.trimEnd());
+  }
+  const out = result.moves.filter((entry) => entry.shadow === null);
+  if (out.length > 0) lines.push('', `Left out by the shadow: ${out.map((entry) => `${entry.path} (was ${entry.current})`).join(', ')}`);
+  return lines.join('\n');
+}
+
+/** Both score sets, their change, and the cases that gained, lost or moved. */
+export function formatShadowEval(result: ShadowEval): string {
+  const { current, shadow } = result;
+  const percent = (value: number) => `${(value * 100).toFixed(0)}%`;
+  const points = (left: number, right: number) => {
+    const change = Math.round((right - left) * 100);
+    return change > 0 ? `+${change}` : String(change);
+  };
+  const fixed = (left: number, right: number) => {
+    const change = right - left;
+    return `${change >= 0 ? '+' : '-'}${Math.abs(change).toFixed(2)}`;
+  };
+  const row = (name: string, now: string, then: string, change: string) => `  ${name.padEnd(7)} ${now.padEnd(8)} ${then.padEnd(7)} ${change}`;
+  const lines = [
+    `${current.cases} cases, recall at ${current.k}: current config ${result.configs.current}, shadow ${result.configs.shadow}`,
+    '',
+    row('', 'current', 'shadow', 'change'),
+    row('hit@k', percent(current.hitRate), percent(shadow.hitRate), points(current.hitRate, shadow.hitRate)),
+    row('MRR', current.mrr.toFixed(2), shadow.mrr.toFixed(2), fixed(current.mrr, shadow.mrr)),
+    row('first', percent(current.firstHit), percent(shadow.firstHit), points(current.firstHit, shadow.firstHit)),
+    row('recall', percent(current.recall), percent(shadow.recall), points(current.recall, shadow.recall)),
+    '',
+  ];
+  if (result.changes.length === 0) lines.push('No case moved.');
+  for (const change of result.changes) {
+    if (change.hit === 'gained') lines.push(`gained a hit: ${change.query} (now ${change.shadow})`);
+    else if (change.hit === 'lost') lines.push(`lost a hit: ${change.query} (was ${change.current})`);
+    else lines.push(`moved: ${change.query} ${change.current} -> ${change.shadow}`);
+  }
+  return lines.join('\n');
 }
