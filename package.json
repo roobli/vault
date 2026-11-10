@@ -1,6 +1,6 @@
 {
   "name": "@roobli/vault",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "A vault of plain Markdown notes as memory for people and agents: one link resolver, a rebuildable index, scoped access, and recall.",
   "license": "AGPL-3.0-only",
   "type": "module",
