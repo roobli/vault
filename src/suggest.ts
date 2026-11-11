@@ -25,7 +25,7 @@ import { addRelationLines, applySplices, type Splice } from './edit.js';
 import type { FileChange } from './git.js';
 import { maskCode, splitFrontmatter } from './markdown.js';
 import { decay } from './memory.js';
-import { dirOf, nameOf } from './paths.js';
+import { anyMatch, dirOf, nameOf } from './paths.js';
 import { buildResolveIndex, wikiLinkTo, type ResolveIndex } from './resolve.js';
 import { hasCjk } from './tokenize.js';
 import { scriptContext } from './scripts.js';
@@ -427,7 +427,12 @@ export function suggest(vault: Vault, options: SuggestOptions = {}): Suggestion[
     }
   }
 
-  const kept = out.filter((item) => !hidden.has(item.id));
+  // What the vault keeps as written is not asked to link, and copies of
+  // others' text are not linked to. A stale link is still offered: it mends a
+  // link the person wrote, wherever it is.
+  const skipFrom = anyMatch(vault.config.suggest.skipFrom);
+  const skipTo = anyMatch(vault.config.suggest.skipTo);
+  const kept = out.filter((item) => !hidden.has(item.id) && (item.type === 'stale' || (!skipFrom(item.from) && !skipTo(item.to))));
   kept.sort((left, right) => right.score - left.score || left.from.localeCompare(right.from));
   return options.limit ? kept.slice(0, options.limit) : kept;
 }

@@ -433,9 +433,16 @@ written to since, or is gone), so a list kept open for a while never puts a
 link in the wrong place. A stale link is only offered where the note still
 has a link at the place the index says.
 
+`brain.yaml` can keep whole folders out: `suggest.skip_from` lists paths
+whose notes are never asked to link (an archive, daily digests, anything kept
+as it was written), `suggest.skip_to` paths whose notes are never offered as
+a target (vendored manuals and other copies of someone else's text). Both take
+the same patterns as `ignore:`. A stale link is offered either way, because it
+mends a link the person wrote.
+
 Nothing is applied until the person says so: `suggest --review` asks about
-each, strongest first, then makes the yes into one proposal and applies it
-if asked; `--propose <id...>` makes a proposal; `--dismiss <id...>` says no.
+the day's budget of them (`budget.daily_reviews`, or `--limit n`), strongest
+first, then makes the yes into one proposal and applies it if asked; `--propose <id...>` makes a proposal; `--dismiss <id...>` says no.
 A no is a line in `.noto/dismissed.jsonl`:
 
 ```json

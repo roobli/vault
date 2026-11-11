@@ -57,6 +57,22 @@ describe('suggest', () => {
     }
   });
 
+  it('asks nothing of the paths brain.yaml keeps as written, and offers nothing from copies of others', async () => {
+    write('.noto/brain.yaml', 'kinds:\n  dated_names_are_logs: true\nsuggest:\n  skip_from: ["**/Elsewhere/"]\n  skip_to: ["**/顶层*"]\n');
+    const vault = await Vault.open(root, { owner: true });
+    try {
+      const all = suggest(vault);
+      // Nothing from the skipped folder, though it still names the note.
+      expect(all.filter((item) => item.from.startsWith('Elsewhere/'))).toEqual([]);
+      // Nothing to the skipped target, though a note still names it.
+      expect(mention(all, 'root-notes.md', '顶层设计说明.md')).toBeUndefined();
+      // The rest is as it was.
+      expect(mention(all, 'Areas/Search/Design/notes.md', 'Areas/Search/Design/目标设计说明.md')).toBeDefined();
+    } finally {
+      vault.close();
+    }
+  });
+
   it('counts a title in the middle of a longer Chinese phrase for less', async () => {
     const vault = await Vault.open(root, { owner: true });
     try {
