@@ -43,6 +43,12 @@ budget:
 append:
   path: "inbox/{yyyy}-{mm}-{dd}.md"
 
+# Link suggestions: notes never asked to link (kept as written), and notes
+# never offered as a target (copies of others' text). Paths as in ignore:.
+suggest:
+  skip_from: []
+  skip_to: []
+
 # How recall ranks, at its defaults. Weights are numbers of 0 or more; counts
 # are whole numbers, 0 switching that source of candidates off. A value out
 # of range keeps its default. A note's score is its relevance times

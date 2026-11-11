@@ -63,6 +63,18 @@ export interface BrainConfig {
   };
   /** The heading a relation list gets when one is added to a note; empty for none. */
   readonly relationsHeading: string;
+  readonly suggest: {
+    /**
+     * Paths whose notes are never asked to link to anything: records kept as
+     * they were written, such as archives and daily digests.
+     */
+    readonly skipFrom: readonly string[];
+    /**
+     * Paths whose notes are never offered as a link's target: copies of other
+     * people's text, such as vendored manuals.
+     */
+    readonly skipTo: readonly string[];
+  };
   /** Every number that shapes how recall ranks and how many candidates it weighs. */
   readonly recall: RecallConfig;
 }
@@ -160,6 +172,7 @@ export const DEFAULT_CONFIG: BrainConfig = {
   budget: { dailyReviews: 10, recallChars: 6000 },
   append: { path: 'inbox/{yyyy}-{mm}-{dd}.md' },
   relationsHeading: '',
+  suggest: { skipFrom: [], skipTo: [] },
   recall: DEFAULT_RECALL,
 };
 
@@ -207,6 +220,7 @@ export function parseConfig(text: string): BrainConfig {
   const gitConfig = map(raw.git);
   const budget = map(raw.budget);
   const append = map(raw.append);
+  const suggestSection = map(raw.suggest);
   return {
     ignore: strs(raw.ignore, d.ignore),
     kinds: {
@@ -223,6 +237,7 @@ export function parseConfig(text: string): BrainConfig {
     budget: { dailyReviews: num(budget.daily_reviews, d.budget.dailyReviews), recallChars: num(budget.recall_chars, d.budget.recallChars) },
     append: { path: str(append.path, d.append.path) },
     relationsHeading: str(raw.relations_heading, d.relationsHeading),
+    suggest: { skipFrom: strs(suggestSection.skip_from, d.suggest.skipFrom), skipTo: strs(suggestSection.skip_to, d.suggest.skipTo) },
     recall: parseRecallConfig(raw.recall),
   };
 }

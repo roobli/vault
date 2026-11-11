@@ -32,7 +32,10 @@ export const nameOf = (rel: string): string => withoutExt(baseOf(rel));
  * folder); anything else is that path exactly, or a folder of that name.
  */
 export function pathMatcher(pattern: string): (rel: string) => boolean {
-  const clean = pattern.replace(/\\/g, '/').replace(/^\.?\//, '');
+  let clean = pattern.replace(/\\/g, '/').replace(/^\.?\//, '');
+  // `**/archived/` is the folder at any depth: a glob already matches what is
+  // below the path it names, so the slash only says it is a folder.
+  if (clean.endsWith('/') && /[*?]/.test(clean)) clean = clean.slice(0, -1);
   if (clean === '**') return () => true;
   if (clean.endsWith('/') && !/[*?]/.test(clean)) {
     const prefix = clean;

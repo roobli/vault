@@ -40,7 +40,7 @@ const HELP = `noto-vault: a vault of Markdown notes as memory
   noto-vault visit <note> [--from n]    record that you opened a note
   noto-vault graph [--out file]         nodes and edges as JSON  [--types a,b] [--min w]
   noto-vault suggest                    links that are missing  [--types mention,together,stale,script] [--from note] [--limit n, also for --json]
-  noto-vault suggest --review           go through them one by one: link it, never, skip; then apply the yes
+  noto-vault suggest --review           go through the day's budget of them one by one (or --limit n): link it, never, skip; then apply the yes
   noto-vault suggest --propose [id...]  the named ones (or the strongest --limit) as a proposal  [--message m]
   noto-vault suggest --dismiss <id...>  never suggest these again (kept in .noto/dismissed.jsonl)  [--reason r] [--review-ms n]
   noto-vault proposals [show|accept|reject <id>]   accept and reject also take [--reason r] [--review-ms n], kept with the record
@@ -258,7 +258,9 @@ async function main(argv: string[]): Promise<number> {
         };
         const found = suggest(vault, options);
         const emphasis = process.stdout.isTTY && !process.env.NO_COLOR ? terminalEmphasis : plainEmphasis;
-        if (values.review) return await review(vault, found.slice(0, number(values.limit, found.length)), emphasis);
+        // A review sitting is the day's budget unless asked for more: a few
+        // looked at properly beat a long list clicked through.
+        if (values.review) return await review(vault, found.slice(0, number(values.limit, vault.config.budget.dailyReviews)), emphasis);
         // Ids name suggestions; an id stands for every suggestion of its kind between its two notes.
         const named = (ids: readonly string[]): Suggestion[] => {
           const unknown = ids.filter((id) => !found.some((item) => item.id === id));
