@@ -213,7 +213,14 @@ export function about(vault: Vault, ref: string, options: AboutOptions = {}): Ab
 
   const links = db.prepare("SELECT target, anchor, line, resolved, kind, anchor_missing FROM links WHERE src = ? AND kind != 'img' ORDER BY start").all(rel) as
     { target: string; anchor: string; line: number; resolved: string | null; kind: string; anchor_missing: number }[];
-  const missingAnchors = links.filter((link) => link.anchor_missing === 1);
+  // Whether a heading is there says what is in the note linked to, so only
+  // for a note this principal may see; for one it may not, the link is just a link.
+  const targetSensitivity = db.prepare('SELECT sensitivity FROM notes WHERE path = ?');
+  const missingAnchors = links.filter((link) => {
+    if (link.anchor_missing !== 1 || link.resolved === null) return false;
+    const row = targetSensitivity.get(link.resolved) as { sensitivity: Sensitivity } | undefined;
+    return row !== undefined && visible(link.resolved, row.sensitivity);
+  });
   // As status counts them: a path from the disk's root points out of the vault, and is not broken.
   const broken = links.filter((link) => link.resolved === null && !(link.kind === 'md' && link.target.startsWith('/')));
 

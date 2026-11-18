@@ -12,6 +12,7 @@ import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { about } from '../src/about.js';
 import { folderAbout } from '../src/folder.js';
+import { keyHash } from '../src/access.js';
 import { Vault } from '../src/vault.js';
 
 let root: string;
@@ -68,6 +69,31 @@ describe('links into a place in a note', () => {
       expect(about(vault, 'links.md').outgoing.brokenAnchors.map((link) => link.anchor)).toEqual(['#Gone']);
     } finally {
       vault.close();
+    }
+  });
+});
+
+describe('a link into a note the reader may not see', () => {
+  it('says nothing about the headings that note has', async () => {
+    write('Sealed/hidden.md', '# Hidden\n\n## Real\n');
+    write('links.md', `${LINKS}- [[Sealed/hidden#Real]] and [[Sealed/hidden#Guess]]\n`);
+    write('.noto/access.yaml', [
+      'sensitivity:', '  sealed: ["Sealed/"]',
+      'principals:', '  agent:', `    keys: [${keyHash('agent-key')}]`, '    verbs: [read]', '    max_sensitivity: private', '',
+    ].join('\n'));
+    const owner = await Vault.open(root, { owner: true });
+    try {
+      expect(about(owner, 'links.md').outgoing.brokenAnchors.map((link) => link.anchor)).toEqual(['#Gone', '#Guess']);
+      expect(folderAbout(owner, '').brokenAnchors).toBe(2);
+    } finally {
+      owner.close();
+    }
+    const agent = await Vault.open(root, { key: 'agent-key' });
+    try {
+      expect(about(agent, 'links.md').outgoing.brokenAnchors.map((link) => link.anchor)).toEqual(['#Gone']);
+      expect(folderAbout(agent, '').brokenAnchors).toBe(1);
+    } finally {
+      agent.close();
     }
   });
 });

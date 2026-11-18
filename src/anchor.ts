@@ -26,14 +26,23 @@ export function headingSlug(text: string): string {
     .replace(/\s/g, '-');
 }
 
-/** The slugs of a note's headings, in order, with GitHub's suffixes for repeats. */
+/**
+ * The slugs of a note's headings, in order, with GitHub's suffixes for
+ * repeats, skipping any a heading already has: `a`, `a-1`, `a` are `a`,
+ * `a-1`, `a-2`.
+ */
 export function headingSlugs(texts: readonly string[]): string[] {
-  const seen = new Map<string, number>();
+  const occurrences = new Map<string, number>();
   return texts.map((text) => {
     const base = headingSlug(text);
-    const count = seen.get(base) ?? 0;
-    seen.set(base, count + 1);
-    return count === 0 ? base : `${base}-${count}`;
+    let slug = base;
+    while (occurrences.has(slug)) {
+      const count = occurrences.get(base)! + 1;
+      occurrences.set(base, count);
+      slug = `${base}-${count}`;
+    }
+    occurrences.set(slug, 0);
+    return slug;
   });
 }
 
@@ -46,6 +55,30 @@ export interface AnchorTargets {
   readonly headings: readonly string[];
   readonly ids: readonly string[];
   readonly blocks: readonly string[];
+}
+
+/** The same, read once for many links into one note: slugs and lower-case texts as sets. */
+interface Places {
+  readonly slugs: ReadonlySet<string>;
+  readonly texts: ReadonlySet<string>;
+  readonly ids: ReadonlySet<string>;
+  readonly blocks: ReadonlySet<string>;
+}
+
+const placesOf = new WeakMap<AnchorTargets, Places>();
+
+function places(targets: AnchorTargets): Places {
+  let found = placesOf.get(targets);
+  if (!found) {
+    found = {
+      slugs: new Set(headingSlugs(targets.headings)),
+      texts: new Set(targets.headings.map((text) => text.trim().toLowerCase())),
+      ids: new Set(targets.ids),
+      blocks: new Set(targets.blocks),
+    };
+    placesOf.set(targets, found);
+  }
+  return found;
 }
 
 const PLACED_ID = /<(?:a|span)\b[^>]*?\b(?:id|name)\s*=\s*(?:"([^"]+)"|'([^']+)'|([^\s"'>]+))/gi;
@@ -66,13 +99,12 @@ export function placedAnchors(text: string): { ids: string[]; blocks: string[] }
 export function anchorReaches(anchor: string, targets: AnchorTargets): boolean {
   const wanted = safeDecode(anchor.replace(/^#/, '')).trim();
   if (wanted.length === 0) return true;
-  if (wanted.startsWith('^')) return targets.blocks.includes(wanted.slice(1));
+  const known = places(targets);
+  if (wanted.startsWith('^')) return known.blocks.has(wanted.slice(1));
   const lower = wanted.toLowerCase();
-  const asSlug = headingSlug(wanted);
-  if (headingSlugs(targets.headings).some((slug) => slug === lower || slug === asSlug)) return true;
-  if (targets.headings.some((text) => text.trim().toLowerCase() === lower)) return true;
+  if (known.slugs.has(lower) || known.slugs.has(headingSlug(wanted)) || known.texts.has(lower)) return true;
   // A wiki link may name a nested heading as `#Part#Section`; the last part is the place.
   const last = wanted.includes('#') ? wanted.slice(wanted.lastIndexOf('#') + 1).trim() : null;
   if (last && last !== wanted) return anchorReaches(`#${last}`, targets);
-  return targets.ids.includes(wanted);
+  return known.ids.has(wanted);
 }

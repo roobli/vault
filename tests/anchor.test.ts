@@ -12,6 +12,7 @@ describe('heading slugs, as @roobli/md spells them', () => {
 
   it('tells repeats apart with a suffix after the first', () => {
     expect(headingSlugs(['B12 脚注', '九、HTML', 'Setup', 'Setup'])).toEqual(['b12-脚注', '九html', 'setup', 'setup-1']);
+    expect(headingSlugs(['a', 'a-1', 'a', 'a'])).toEqual(['a', 'a-1', 'a-2', 'a-3']);
   });
 });
 
