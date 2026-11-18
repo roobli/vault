@@ -416,6 +416,7 @@ export class Vault {
       links: count('SELECT count(*) AS n FROM links'),
       broken: count("SELECT count(*) AS n FROM links WHERE resolved IS NULL AND kind != 'img' AND NOT (kind = 'md' AND target LIKE '/%')"),
       offsite: count("SELECT count(*) AS n FROM links WHERE resolved IS NULL AND kind = 'md' AND target LIKE '/%'"),
+      brokenAnchors: count('SELECT count(*) AS n FROM links WHERE anchor_missing = 1'),
       ambiguous: count('SELECT count(*) AS n FROM links WHERE ambiguous = 1'),
       viaAlias: count("SELECT count(*) AS n FROM links WHERE via = 'alias'"),
       commits: count('SELECT count(*) AS n FROM commits'),

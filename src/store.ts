@@ -8,7 +8,7 @@ import { mkdirSync } from 'node:fs';
 import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 
-export const SCHEMA_VERSION = 4;
+export const SCHEMA_VERSION = 5;
 
 const SCHEMA = `
 CREATE TABLE meta(key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -27,6 +27,7 @@ CREATE TABLE notes(
   chars INTEGER NOT NULL,
   frontmatter TEXT NOT NULL,
   headings TEXT NOT NULL,
+  anchors TEXT NOT NULL DEFAULT '{"ids":[],"blocks":[]}',
   tags TEXT NOT NULL,
   aliases TEXT NOT NULL,
   origins TEXT NOT NULL
@@ -44,7 +45,8 @@ CREATE TABLE links(
   end INTEGER NOT NULL,
   resolved TEXT,
   ambiguous INTEGER NOT NULL DEFAULT 0,
-  via TEXT
+  via TEXT,
+  anchor_missing INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX links_src ON links(src);
 CREATE INDEX links_resolved ON links(resolved);

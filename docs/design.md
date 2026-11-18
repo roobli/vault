@@ -103,6 +103,18 @@ two read a vault's links the same way:
 4. New here: a link that still matched nothing is tried against aliases,
    which are card `id`s and `aliases`, and old paths and old names from git's
    rename history. One match wins.
+5. A link that reached its note and carries an anchor (`[[note#Setup]]`,
+   `[x](note.md#setup)`, `[[note#^ref]]`) is checked for the place too
+   (`anchor.ts`). A heading is named by GitHub's slug, the one
+   `@roobli/md/inline` spells (lower case, spaces as hyphens, most
+   punctuation dropped, CJK kept, `-1` after a repeat), or by its text as a
+   wiki link writes it, and the last part of `#Part#Section`; a note may place
+   `<a id>` / `<span id>` anchors itself; `#^id` names a line ending `^id`.
+   One that names nothing there sets `anchor_missing` on the link. It is not
+   counted as broken, since the link still opens the note: `status`, `about`,
+   the folder view and the weekly report count it apart, as
+   `brokenAnchors`. Links into a note are checked again when that note
+   changes, so renaming a heading shows up in the notes that link to it.
 
 New links are written the way the vault already writes them: a bare
 `[[name]]` when the name is unique, otherwise the path from the vault root
