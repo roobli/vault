@@ -220,6 +220,15 @@ export function weeklyReport(vault: Vault, options: ReportOptions = {}): string 
     out.push(...table(['note', 'line', 'link'], broken.slice(0, LIST_MAX).map((link) => [code(link.src), link.line, code(link.target)])), '');
   }
 
+  const missing = db.prepare(`SELECT src, target, anchor, line FROM links WHERE anchor_missing = 1 ORDER BY src, line, target`).all() as
+    { src: string; target: string; anchor: string; line: number }[];
+  out.push('## Links to a heading that is not there', '');
+  if (missing.length === 0) out.push('None.', '');
+  else {
+    out.push(`Links that reach their note but not the heading, id or block they name: ${missing.length} in all${missing.length > LIST_MAX ? `; the first ${LIST_MAX}` : ''}.`, '');
+    out.push(...table(['note', 'line', 'link'], missing.slice(0, LIST_MAX).map((link) => [code(link.src), link.line, code(`${link.target}${link.anchor}`)])), '');
+  }
+
   const linked = new Set<string>();
   for (const row of db.prepare(`SELECT DISTINCT src, resolved FROM links WHERE resolved IS NOT NULL AND kind != 'img' AND src != resolved`).all() as { src: string; resolved: string }[]) {
     linked.add(row.src);

@@ -23,6 +23,8 @@ export { parseNote, extractLinks, splitFrontmatter, frontmatterOf, maskCode, mas
 export type { Link, LinkKind, Heading, ParsedNote } from './markdown.js';
 export { resolveLink, buildResolveIndex, wikiLinkTo, aliasKey } from './resolve.js';
 export type { ResolveIndex, Resolution } from './resolve.js';
+export { anchorReaches, headingSlug, headingSlugs, placedAnchors } from './anchor.js';
+export type { AnchorTargets } from './anchor.js';
 export { parseYaml, parseYamlMap } from './yaml.js';
 export type { YamlValue } from './yaml.js';
 export { loadConfig, parseConfig, parseRecallConfig, recallConfigHash, DEFAULT_CONFIG, DEFAULT_RECALL, KINDS, SOURCES } from './config.js';

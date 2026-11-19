@@ -161,7 +161,7 @@ describe('about', () => {
       expect(info.aboutSame.some((item) => listed.includes(item.path))).toBe(false);
 
       const line = ARGUS_TEXT.split('\n').findIndex((text) => text.includes('[[missing-note]]')) + 1;
-      expect(info.outgoing).toEqual({ count: 1, broken: [{ target: 'missing-note', line }], brokenCount: 1 });
+      expect(info.outgoing).toEqual({ count: 1, broken: [{ target: 'missing-note', line }], brokenCount: 1, brokenAnchors: [], brokenAnchorCount: 0 });
       expect(about(vault, 'Knowledge/old.md').supersededBy).toEqual({ path: 'Knowledge/new.md', title: 'New way' });
       expect(info.supersededBy).toBeNull();
     } finally {

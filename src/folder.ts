@@ -7,6 +7,7 @@
  * the folder's history is, git says, not this. Nothing here records an event.
  */
 
+import type { Sensitivity } from './access.js';
 import type { Kind } from './config.js';
 import { decay } from './memory.js';
 import type { Vault } from './vault.js';
@@ -30,6 +31,8 @@ export interface FolderAbout {
   readonly orphans: { readonly count: number; readonly items: readonly FolderNote[] };
   /** Links in the folder's notes that name nothing in the vault. */
   readonly broken: number;
+  /** Links in the folder's notes that reach a note but not the heading, id or block their anchor names. */
+  readonly brokenAnchors: number;
 }
 
 export interface FolderAboutOptions {
@@ -95,6 +98,10 @@ export function folderAbout(vault: Vault, folder: string, options: FolderAboutOp
   const broken = (db.prepare(`SELECT src FROM links WHERE resolved IS NULL AND kind != 'img'
     AND NOT (kind = 'md' AND target LIKE '/%') AND ${src.sql}`).all(...src.values) as { src: string }[])
     .filter((row) => seen.has(row.src)).length;
+  // Counted only into notes the principal may see, as `about` lists them.
+  const brokenAnchors = (db.prepare(`SELECT l.src, l.resolved, n.sensitivity FROM links l JOIN notes n ON n.path = l.resolved
+    WHERE l.anchor_missing = 1 AND ${under(name, 'l.src').sql}`).all(...src.values) as { src: string; resolved: string; sensitivity: Sensitivity }[])
+    .filter((row) => seen.has(row.src) && vault.canSee({ path: row.resolved, sensitivity: row.sensitivity })).length;
 
   const top = (score: (note: FolderNote) => number) => notes.filter((note) => score(note) > 0)
     .sort((left, right) => score(right) - score(left) || left.path.localeCompare(right.path)).slice(0, limit);
@@ -105,5 +112,6 @@ export function folderAbout(vault: Vault, folder: string, options: FolderAboutOp
     mostRead: top((note) => note.reads),
     orphans: { count: orphans.length, items: orphans.slice(0, limit).map((note) => byPath.get(note.path)!) },
     broken,
+    brokenAnchors,
   };
 }

@@ -38,6 +38,7 @@ export function formatAbout(info: AboutNote): string {
   section('Opened or changed with it', info.togetherCount, info.together.map((item) => `${item.title}  ${item.path}  (${item.type === 'visit' ? 'opened with it' : 'changed with it'} ${item.count} times)`));
   section('About the same', info.aboutSame.length, info.aboutSame.map((item) => `${item.title}  ${item.path}  (${item.why.join('; ')})`));
   section('Broken links', info.outgoing.brokenCount, info.outgoing.broken.map((link) => `${link.target}  line ${link.line}`));
+  section('Links to a heading that is not there', info.outgoing.brokenAnchorCount, info.outgoing.brokenAnchors.map((link) => `${link.target}${link.anchor}  line ${link.line}`));
   lines.push('');
   lines.push(`Links out: ${info.outgoing.count}. Writes: ${info.writes.commits} commits, ${info.writes.appends} appends.`);
   for (const agent of info.writes.agents) lines.push(`  written by ${agent.actor}: ${agent.count}, last ${agent.last.slice(0, 10)}`);

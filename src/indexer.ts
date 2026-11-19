@@ -17,7 +17,8 @@ import { SENSITIVITIES } from './access.js';
 import { KINDS, SOURCES, type BrainConfig, type Kind, type Source } from './config.js';
 import { EVENT_LINE_MAX, eventsDir } from './events.js';
 import { commitsSince, findRepo, headCommit, isAncestor, type GitRepo } from './git.js';
-import { dateFromName, parseNote, stringList, type Link } from './markdown.js';
+import { anchorReaches, placedAnchors, type AnchorTargets } from './anchor.js';
+import { dateFromName, parseNote, stringList, type Heading, type Link } from './markdown.js';
 import { recomputeWeights } from './memory.js';
 import { anyMatch, baseOf, dirOf, isMarkdown } from './paths.js';
 import { aliasKey, buildResolveIndex, resolveLink, type ResolveIndex } from './resolve.js';
@@ -135,7 +136,7 @@ function countChars(text: string): number {
 interface Built {
   readonly row: {
     path: string; hash: string; title: string; id: string | null; kind: Kind; source: Source | null; sensitivity: Sensitivity;
-    status: string | null; date: string | null; chars: number; frontmatter: string; headings: string; tags: string; aliases: string;
+    status: string | null; date: string | null; chars: number; frontmatter: string; headings: string; anchors: string; tags: string; aliases: string;
     origins: string;
   };
   readonly links: readonly (Link & { readonly derived?: boolean })[];
@@ -185,6 +186,7 @@ function buildNote(ix: IndexContext, rel: string, text: string, hash: string): B
       chars: countChars(parsed.body),
       frontmatter: JSON.stringify(fm),
       headings: JSON.stringify(parsed.headings),
+      anchors: JSON.stringify(placedAnchors(text)),
       tags: JSON.stringify(tags),
       aliases: JSON.stringify(aliases),
       origins: JSON.stringify(origins),
@@ -312,11 +314,11 @@ export function refresh(ix: IndexContext, options: { full?: boolean; paths?: rea
   const deleteFts = db.prepare('DELETE FROM fts WHERE rowid = ?');
   const deleteLinks = db.prepare('DELETE FROM links WHERE src = ?');
   const deleteAliases = db.prepare("DELETE FROM aliases WHERE path = ? AND origin IN ('id', 'alias')");
-  const upsertNote = db.prepare(`INSERT INTO notes(path, hash, title, id, kind, source, sensitivity, status, date, chars, frontmatter, headings, tags, aliases, origins)
-    VALUES (@path, @hash, @title, @id, @kind, @source, @sensitivity, @status, @date, @chars, @frontmatter, @headings, @tags, @aliases, @origins)
+  const upsertNote = db.prepare(`INSERT INTO notes(path, hash, title, id, kind, source, sensitivity, status, date, chars, frontmatter, headings, anchors, tags, aliases, origins)
+    VALUES (@path, @hash, @title, @id, @kind, @source, @sensitivity, @status, @date, @chars, @frontmatter, @headings, @anchors, @tags, @aliases, @origins)
     ON CONFLICT(path) DO UPDATE SET hash = excluded.hash, title = excluded.title, id = excluded.id, kind = excluded.kind, source = excluded.source,
       sensitivity = excluded.sensitivity, status = excluded.status, date = excluded.date, chars = excluded.chars, frontmatter = excluded.frontmatter,
-      headings = excluded.headings, tags = excluded.tags, aliases = excluded.aliases, origins = excluded.origins
+      headings = excluded.headings, anchors = excluded.anchors, tags = excluded.tags, aliases = excluded.aliases, origins = excluded.origins
     RETURNING nid`);
   const insertFts = db.prepare('INSERT INTO fts(rowid, title, path, body) VALUES (?, ?, ?, ?)');
   const insertLink = db.prepare('INSERT INTO links(src, kind, target, anchor, label, relation, line, start, end) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)');
@@ -431,6 +433,9 @@ export function refresh(ix: IndexContext, options: { full?: boolean; paths?: rea
   // Links: every note's when the set of files or the aliases changed, else the changed notes'.
   const relinked: RefreshStats['relinked'] = fileSetChanged || renamesChanged || aliasesChanged ? 'all' : changedNotes.size > 0 ? 'changed' : 'none';
   if (relinked !== 'none') resolveLinks(ix, new Set(disk.keys()), relinked === 'all' ? null : changedNotes);
+  // A heading renamed in one note breaks the anchors of links in others, so
+  // links into a changed note are checked as well as links out of one.
+  if (relinked !== 'none') checkAnchors(ix, relinked === 'all' ? null : changedNotes);
   lap(`links (${relinked})`);
 
   const events = ingestEvents(ix);
@@ -525,6 +530,35 @@ function resolveLinks(ix: IndexContext, files: ReadonlySet<string>, only: Readon
       const ambiguous = hit?.ambiguous ? 1 : 0;
       const via = hit?.via ?? null;
       if (resolved !== row.resolved || ambiguous !== row.ambiguous || via !== row.via) update.run(resolved, ambiguous, via, row.id);
+    }
+  });
+}
+
+/**
+ * Mark each resolved link whose `#anchor` names no place in the note it
+ * reaches (`anchor.ts`): links out of `only` and links into it, or all.
+ */
+function checkAnchors(ix: IndexContext, only: ReadonlySet<string> | null): void {
+  const { db } = ix.store;
+  const rows = db.prepare("SELECT rowid AS id, src, anchor, resolved, anchor_missing FROM links WHERE anchor != '' AND kind != 'img'").all() as
+    { id: number; src: string; anchor: string; resolved: string | null; anchor_missing: number }[];
+  const note = db.prepare('SELECT headings, anchors FROM notes WHERE path = ?');
+  const update = db.prepare('UPDATE links SET anchor_missing = ? WHERE rowid = ?');
+  const targets = new Map<string, AnchorTargets | null>();
+  const targetsOf = (rel: string): AnchorTargets | null => {
+    if (targets.has(rel)) return targets.get(rel)!;
+    const row = note.get(rel) as { headings: string; anchors: string } | undefined;
+    // A file that is not a note (a PDF, an image) has no places to miss.
+    const found = row ? { headings: (JSON.parse(row.headings) as Heading[]).map((heading) => heading.text), ...(JSON.parse(row.anchors) as { ids: string[]; blocks: string[] }) } : null;
+    targets.set(rel, found);
+    return found;
+  };
+  ix.store.transaction(() => {
+    for (const row of rows) {
+      if (only && !only.has(row.src) && !(row.resolved !== null && only.has(row.resolved))) continue;
+      const place = row.resolved === null ? null : targetsOf(row.resolved);
+      const missing = place !== null && !anchorReaches(row.anchor, place) ? 1 : 0;
+      if (missing !== row.anchor_missing) update.run(missing, row.id);
     }
   });
 }

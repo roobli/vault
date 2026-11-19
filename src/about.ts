@@ -62,8 +62,17 @@ export interface AboutNote {
   readonly togetherCount: number;
   /** What recall finds with this note's title as the cue, from this note, less the note itself and every note in the lists above. */
   readonly aboutSame: readonly { path: string; title: string; why: readonly string[]; excerpt: string }[];
-  /** Links in this note, images aside. `broken` holds the first `limit` that reach nothing; `brokenCount` says how many in all. */
-  readonly outgoing: { readonly count: number; readonly broken: readonly { target: string; line: number }[]; readonly brokenCount: number };
+  /**
+   * Links in this note, images aside. `broken` holds the first `limit` that reach nothing; `brokenCount` says how many in all.
+   * `brokenAnchors` holds the first `limit` that reach their note but not the heading, id or block their `#anchor` names, with `brokenAnchorCount`.
+   */
+  readonly outgoing: {
+    readonly count: number;
+    readonly broken: readonly { target: string; line: number }[];
+    readonly brokenCount: number;
+    readonly brokenAnchors: readonly { target: string; anchor: string; line: number }[];
+    readonly brokenAnchorCount: number;
+  };
   /** Opens, reads, recalls and cites of this note per local calendar day, YYYY-MM-DD, for the latest `limit` days that had any, oldest first. */
   readonly reads: readonly { day: string; count: number }[];
   /** Who did those, most first; `last` is ISO. Anyone but the owner hears only of itself. */
@@ -202,8 +211,16 @@ export function about(vault: Vault, ref: string, options: AboutOptions = {}): Ab
     WHERE (l.resolved = ? AND l.relation = 'supersedes') OR (l.src = ? AND l.relation = 'superseded_by' AND l.resolved IS NOT NULL)`).all(rel, rel) as
       { path: string; title: string; sensitivity: Sensitivity }[]).find((row) => row.path !== rel && visible(row.path, row.sensitivity));
 
-  const links = db.prepare("SELECT target, line, resolved, kind FROM links WHERE src = ? AND kind != 'img' ORDER BY start").all(rel) as
-    { target: string; line: number; resolved: string | null; kind: string }[];
+  const links = db.prepare("SELECT target, anchor, line, resolved, kind, anchor_missing FROM links WHERE src = ? AND kind != 'img' ORDER BY start").all(rel) as
+    { target: string; anchor: string; line: number; resolved: string | null; kind: string; anchor_missing: number }[];
+  // Whether a heading is there says what is in the note linked to, so only
+  // for a note this principal may see; for one it may not, the link is just a link.
+  const targetSensitivity = db.prepare('SELECT sensitivity FROM notes WHERE path = ?');
+  const missingAnchors = links.filter((link) => {
+    if (link.anchor_missing !== 1 || link.resolved === null) return false;
+    const row = targetSensitivity.get(link.resolved) as { sensitivity: Sensitivity } | undefined;
+    return row !== undefined && visible(link.resolved, row.sensitivity);
+  });
   // As status counts them: a path from the disk's root points out of the vault, and is not broken.
   const broken = links.filter((link) => link.resolved === null && !(link.kind === 'md' && link.target.startsWith('/')));
 
@@ -270,7 +287,13 @@ export function about(vault: Vault, ref: string, options: AboutOptions = {}): Ab
     together: together.slice(0, limit),
     togetherCount: together.length,
     aboutSame,
-    outgoing: { count: links.length, broken: broken.slice(0, limit).map(({ target, line }) => ({ target, line })), brokenCount: broken.length },
+    outgoing: {
+      count: links.length,
+      broken: broken.slice(0, limit).map(({ target, line }) => ({ target, line })),
+      brokenCount: broken.length,
+      brokenAnchors: missingAnchors.slice(0, limit).map(({ target, anchor, line }) => ({ target, anchor, line })),
+      brokenAnchorCount: missingAnchors.length,
+    },
     reads: latest([...days].map(([day, count]) => ({ day, count })), limit),
     readers,
     leadsHere,
