@@ -22,8 +22,8 @@ const commit = (message: string, when: string) => {
   });
 };
 
-const ARGUS = 'Projects/Argus/00_索引.md';
-const ARGUS_TEXT = '---\nmoc: true\nid: argus\n---\n# Argus 审计\n\nArgus 是审计服务。索引版本命名要带日期，见 [[missing-note]]。\n';
+const BEACON = 'Projects/Beacon/00_索引.md';
+const BEACON_TEXT = '---\nmoc: true\nid: beacon\n---\n# Beacon 审计\n\nBeacon 是审计服务。索引版本命名要带日期，见 [[missing-note]]。\n';
 const IDEA = 'Knowledge/idea.md';
 const PLAIN = 'Knowledge/plain.md';
 const SEALED = 'Sealed/keys.md';
@@ -34,25 +34,25 @@ const at = (day: number, hour: number, minute: number) => new Date(2026, 10, day
 beforeEach(() => {
   root = mkdtempSync(path.join(os.tmpdir(), 'noto-about-'));
   git('init', '-q', '-b', 'main');
-  write(ARGUS, ARGUS_TEXT);
-  write('Projects/Argus/2026_11_03_接入.md', '# Argus 接入\n\n今天接入。\n\n- 属于 [[00_索引]]\n');
-  write(PLAIN, '# Plain\n\n看 [[argus]] 的设计。\n');
+  write(BEACON, BEACON_TEXT);
+  write('Projects/Beacon/2026_11_03_接入.md', '# Beacon 接入\n\n今天接入。\n\n- 属于 [[00_索引]]\n');
+  write(PLAIN, '# Plain\n\n看 [[beacon]] 的设计。\n');
   write('Knowledge/索引版本命名.md', '---\ntype: decision\nknown: lived\nsensitivity: private\n---\n# 索引版本命名\n\n版本名带日期。\n');
-  write('Knowledge/audit.md', '# 审计流程\n\nArgus 的审计流程怎么走。\n');
+  write('Knowledge/audit.md', '# 审计流程\n\nBeacon 的审计流程怎么走。\n');
   write('Knowledge/idea-old.md', '# 想法记录\n\n一个想法。\n');
   write('Knowledge/old.md', '# Old way\n\nThe old way.\n');
   write('Knowledge/new.md', '# New way\n\nThe new way.\n\n- supersedes [[old]]\n');
   write('Scripted/plan.md', '# Plan\n\nA plan.\n');
   write('Scripted/heard.md', '---\nknown: heard\n---\n# Heard\n\nSomething heard.\n');
-  write('Private/diary.md', '---\nsensitivity: open\n---\n# Diary\n\n关于 [[argus]] 的私事。\n');
+  write('Private/diary.md', '---\nsensitivity: open\n---\n# Diary\n\n关于 [[beacon]] 的私事。\n');
   write('Private/scripted.md', '# Scripted\n\nPrivate twice.\n');
   write('Private/tied.md', '---\nsensitivity: private\n---\n# Tied\n\nPrivate three times.\n');
-  write(SEALED, '# Keys\n\n[[argus]] 的密码。\n');
+  write(SEALED, '# Keys\n\n[[beacon]] 的密码。\n');
   commit('first', '2026-11-01T10:00:00Z');
   git('mv', 'Knowledge/idea-old.md', IDEA);
   commit('rename the idea', '2026-11-02T10:00:00Z');
-  write(ARGUS, `${ARGUS_TEXT}\n更新。\n`);
-  commit('change argus', '2026-11-03T10:00:00Z');
+  write(BEACON, `${BEACON_TEXT}\n更新。\n`);
+  commit('change beacon', '2026-11-03T10:00:00Z');
 
   write('.noto/brain.yaml', 'kinds:\n  fields: [type]\nco_change:\n  max_notes: 3\n');
   write('.noto/access.yaml', [
@@ -80,20 +80,20 @@ beforeEach(() => {
   // The format src/events.ts writes: one JSON object per line.
   const events = [
     { time: at(2, 9, 0), actor: 'owner', verb: 'open', path: 'Knowledge/idea-old.md', session: 's1' },
-    { time: at(3, 9, 0), actor: 'owner', verb: 'open', path: ARGUS, session: 's2' },
-    { time: at(3, 9, 1), actor: 'owner', verb: 'open', path: IDEA, session: 's2', from: ARGUS },
-    { time: at(3, 9, 2), actor: 'owner', verb: 'open', path: ARGUS, session: 's2', from: IDEA },
+    { time: at(3, 9, 0), actor: 'owner', verb: 'open', path: BEACON, session: 's2' },
+    { time: at(3, 9, 1), actor: 'owner', verb: 'open', path: IDEA, session: 's2', from: BEACON },
+    { time: at(3, 9, 2), actor: 'owner', verb: 'open', path: BEACON, session: 's2', from: IDEA },
     { time: at(3, 9, 3), actor: 'owner', verb: 'open', path: PLAIN, session: 's2' },
-    { time: at(4, 10, 0), actor: 'owner', verb: 'open', path: ARGUS, session: 's3', from: SEALED },
-    { time: at(4, 10, 1), actor: 'owner', verb: 'open', path: ARGUS, session: 's3', from: IDEA },
-    { time: at(4, 10, 5), actor: 'agent', verb: 'read', path: ARGUS, session: 's4' },
-    { time: at(4, 10, 6), actor: 'agent', verb: 'recall', path: ARGUS, session: 's4', query: '审计' },
-    { time: at(4, 10, 7), actor: 'owner', verb: 'cite', path: ARGUS },
-    { time: at(4, 10, 8), actor: 'owner', verb: 'write', path: ARGUS },
-    { time: at(4, 10, 9), actor: 'owner', verb: 'append', path: ARGUS },
+    { time: at(4, 10, 0), actor: 'owner', verb: 'open', path: BEACON, session: 's3', from: SEALED },
+    { time: at(4, 10, 1), actor: 'owner', verb: 'open', path: BEACON, session: 's3', from: IDEA },
+    { time: at(4, 10, 5), actor: 'agent', verb: 'read', path: BEACON, session: 's4' },
+    { time: at(4, 10, 6), actor: 'agent', verb: 'recall', path: BEACON, session: 's4', query: '审计' },
+    { time: at(4, 10, 7), actor: 'owner', verb: 'cite', path: BEACON },
+    { time: at(4, 10, 8), actor: 'owner', verb: 'write', path: BEACON },
+    { time: at(4, 10, 9), actor: 'owner', verb: 'append', path: BEACON },
     // An agent that edits the file itself says so from its hook; the person's writes are git's to count.
-    { time: at(4, 10, 10), actor: 'claude-code', verb: 'write', path: ARGUS, session: 'cc' },
-    { time: at(4, 10, 11), actor: 'claude-code', verb: 'write', path: ARGUS, session: 'cc', repeat: 2, until: at(4, 10, 12) },
+    { time: at(4, 10, 10), actor: 'claude-code', verb: 'write', path: BEACON, session: 'cc' },
+    { time: at(4, 10, 11), actor: 'claude-code', verb: 'write', path: BEACON, session: 'cc', repeat: 2, until: at(4, 10, 12) },
     // Reached from a note by its old path, and from a path that is gone though it reads like a title.
     { time: at(4, 11, 0), actor: 'owner', verb: 'open', path: 'Knowledge/audit.md', session: 's9', from: 'Knowledge/idea-old.md' },
     { time: at(4, 12, 0), actor: 'owner', verb: 'open', path: 'Knowledge/audit.md', session: 's10', from: 'Plain' },
@@ -116,8 +116,8 @@ describe('about', () => {
         return { kind: info.kind, known: info.known, sensitivity: info.sensitivity };
       };
       // A card by the card rule, a log by its dated name, and nothing said about the rest.
-      expect(origins(ARGUS)).toEqual({ kind: { value: 'card', from: 'config' }, known: { value: null, from: 'default' }, sensitivity: { value: 'open', from: 'default' } });
-      expect(origins('Projects/Argus/2026_11_03_接入.md').kind).toEqual({ value: 'log', from: 'config' });
+      expect(origins(BEACON)).toEqual({ kind: { value: 'card', from: 'config' }, known: { value: null, from: 'default' }, sensitivity: { value: 'open', from: 'default' } });
+      expect(origins('Projects/Beacon/2026_11_03_接入.md').kind).toEqual({ value: 'log', from: 'config' });
       expect(origins(PLAIN)).toEqual({ kind: { value: 'note', from: 'default' }, known: { value: null, from: 'default' }, sensitivity: { value: 'open', from: 'default' } });
       // A frontmatter field brain.yaml maps, and the note's own word for the rest.
       expect(origins('Knowledge/索引版本命名.md')).toEqual({ kind: { value: 'decision', from: 'config' }, known: { value: 'lived', from: 'note' }, sensitivity: { value: 'private', from: 'note' } });
@@ -138,12 +138,12 @@ describe('about', () => {
     const vault = await open();
     try {
       const now = Date.now();
-      const info = about(vault, 'argus', { now });
-      expect(info).toMatchObject({ path: ARGUS, title: 'Argus 审计', id: 'argus', aliases: ['argus'] });
-      expect(info.heat).toEqual(vault.heatOf(ARGUS, now));
-      expect(info.linksHere.map((link) => link.path).sort()).toEqual(['Private/diary.md', PLAIN, 'Projects/Argus/2026_11_03_接入.md', SEALED].sort());
+      const info = about(vault, 'beacon', { now });
+      expect(info).toMatchObject({ path: BEACON, title: 'Beacon 审计', id: 'beacon', aliases: ['beacon'] });
+      expect(info.heat).toEqual(vault.heatOf(BEACON, now));
+      expect(info.linksHere.map((link) => link.path).sort()).toEqual(['Private/diary.md', PLAIN, 'Projects/Beacon/2026_11_03_接入.md', SEALED].sort());
       expect(info.linksHereCount).toBe(4);
-      expect(info.linksHere.find((link) => link.path === 'Projects/Argus/2026_11_03_接入.md')?.relation).toBe('part_of');
+      expect(info.linksHere.find((link) => link.path === 'Projects/Beacon/2026_11_03_接入.md')?.relation).toBe('part_of');
       // Every note was written once; Plain was also opened, so it is the warmest.
       expect(info.linksHere[0]).toMatchObject({ path: PLAIN, reads: 1 });
 
@@ -156,11 +156,11 @@ describe('about', () => {
       expect(info.togetherCount).toBe(1);
       expect(info.together[0]!.weight).toBeGreaterThan(0);
 
-      const listed = [ARGUS, ...info.linksHere.map((link) => link.path), ...info.namedHere.map((item) => item.to), ...info.together.map((item) => item.path)];
+      const listed = [BEACON, ...info.linksHere.map((link) => link.path), ...info.namedHere.map((item) => item.to), ...info.together.map((item) => item.path)];
       expect(info.aboutSame.map((item) => item.path)).toContain('Knowledge/audit.md');
       expect(info.aboutSame.some((item) => listed.includes(item.path))).toBe(false);
 
-      const line = ARGUS_TEXT.split('\n').findIndex((text) => text.includes('[[missing-note]]')) + 1;
+      const line = BEACON_TEXT.split('\n').findIndex((text) => text.includes('[[missing-note]]')) + 1;
       expect(info.outgoing).toEqual({ count: 1, broken: [{ target: 'missing-note', line }], brokenCount: 1, brokenAnchors: [], brokenAnchorCount: 0 });
       expect(about(vault, 'Knowledge/old.md').supersededBy).toEqual({ path: 'Knowledge/new.md', title: 'New way' });
       expect(info.supersededBy).toBeNull();
@@ -173,7 +173,7 @@ describe('about', () => {
     const before = readFileSync(path.join(root, EVENTS), 'utf8');
     const vault = await open();
     try {
-      const info = about(vault, ARGUS);
+      const info = about(vault, BEACON);
       // A write and an append are not reads.
       expect(info.reads).toEqual([{ day: '2026-11-03', count: 2 }, { day: '2026-11-04', count: 5 }]);
       expect(info.readers).toEqual([
@@ -184,10 +184,10 @@ describe('about', () => {
       expect(info.leadsHere).toContainEqual({ from: SEALED, query: null, count: 1 });
       expect(info.leadsHere).toContainEqual({ from: null, query: '审计', count: 1 });
       expect(info.writes).toEqual({ commits: 2, appends: 1, agents: [{ actor: 'claude-code', count: 3, last: at(4, 10, 12) }] });
-      expect(about(vault, ARGUS, { limit: 1 }).reads).toEqual([{ day: '2026-11-04', count: 5 }]);
+      expect(about(vault, BEACON, { limit: 1 }).reads).toEqual([{ day: '2026-11-04', count: 5 }]);
       // A limit from a command line may be anything: a fraction counts down, below zero is none.
-      expect(about(vault, ARGUS, { limit: 1.5 }).readers).toHaveLength(1);
-      const none = about(vault, ARGUS, { limit: -1 });
+      expect(about(vault, BEACON, { limit: 1.5 }).readers).toHaveLength(1);
+      const none = about(vault, BEACON, { limit: -1 });
       expect([none.linksHere, none.reads, none.readers, none.leadsHere, none.aboutSame].every((list) => list.length === 0)).toBe(true);
       expect(none.linksHereCount).toBe(4);
       // A note an event came from is where its old path leads now; a path that leads nowhere stays as written.
@@ -207,7 +207,7 @@ describe('about', () => {
     const vault = await open();
     try {
       const agents = (ref: string) => Object.fromEntries(about(vault, ref).agents.map((agent) => [agent.name, agent]));
-      expect(Object.keys(agents(ARGUS))).toEqual(['agent', 'reader', 'blind', 'default']);
+      expect(Object.keys(agents(BEACON))).toEqual(['agent', 'reader', 'blind', 'default']);
       expect(agents('Private/diary.md')).toMatchObject({
         agent: { canSee: true, why: null },
         reader: { canSee: false, why: 'the note is private' },
@@ -228,9 +228,9 @@ describe('about', () => {
       expect(() => about(agent, SEALED)).toThrow(AccessError);
       // The same refusal for a note that is not there, so it says nothing about what is hidden.
       expect(() => about(agent, 'Nowhere/none.md')).toThrow(AccessError);
-      expect(() => about(blind, ARGUS)).toThrow(AccessError);
+      expect(() => about(blind, BEACON)).toThrow(AccessError);
 
-      const seen = about(agent, ARGUS);
+      const seen = about(agent, BEACON);
       expect(seen.linksHere.map((link) => link.path)).not.toContain(SEALED);
       expect(seen.linksHere.map((link) => link.path)).toContain('Private/diary.md');
       // Anyone but the owner hears only of what it did itself, and of itself among the agents.
@@ -238,8 +238,8 @@ describe('about', () => {
       expect(seen.leadsHere).toEqual([{ from: null, query: '审计', count: 1 }]);
       expect(seen.agents).toEqual([{ name: 'agent', canSee: true, why: null }]);
 
-      const outsider = about(nobody, ARGUS);
-      expect(outsider.linksHere.map((link) => link.path).sort()).toEqual([PLAIN, 'Projects/Argus/2026_11_03_接入.md'].sort());
+      const outsider = about(nobody, BEACON);
+      expect(outsider.linksHere.map((link) => link.path).sort()).toEqual([PLAIN, 'Projects/Beacon/2026_11_03_接入.md'].sort());
       expect(outsider.linksHereCount).toBe(2);
       // The note it names is private.
       expect(outsider.namedHere).toEqual([]);

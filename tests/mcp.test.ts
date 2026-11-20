@@ -16,7 +16,7 @@ beforeEach(() => {
   execFileSync('git', ['init', '-q', '-b', 'main'], { cwd: root });
   mkdirSync(path.join(root, 'notes'));
   mkdirSync(path.join(root, '.noto'));
-  writeFileSync(path.join(root, 'notes', 'argus.md'), '# Argus\n\nThe audit service; its index names carry a date.\n');
+  writeFileSync(path.join(root, 'notes', 'beacon.md'), '# Beacon\n\nThe audit service; its index names carry a date.\n');
   writeFileSync(path.join(root, '.noto', 'access.yaml'), `principals:\n  agent:\n    keys: [${keyHash('k')}]\n    append: ["inbox/**"]\n    verbs: [read, search, recall, append, propose]\n`);
 });
 
@@ -55,7 +55,7 @@ describe('the vault over MCP', () => {
       expect(answers.get(1)!.result).toMatchObject({ protocolVersion: '2025-06-18', capabilities: { tools: {} }, serverInfo: { name: 'noto-vault' } });
       expect(answers.get(2)!.result.tools.map((tool: { name: string }) => tool.name)).toEqual(['recall', 'search', 'read', 'append', 'propose']);
       expect(answers.get(3)!.result.isError).toBe(false);
-      expect(answers.get(3)!.result.content[0].text).toContain('notes/argus.md');
+      expect(answers.get(3)!.result.content[0].text).toContain('notes/beacon.md');
       expect(answers.size).toBe(3);
     } finally {
       vault.close();
@@ -69,11 +69,11 @@ describe('the vault over MCP', () => {
         { jsonrpc: '2.0', id: 'd', method: 'server/discover', params: META },
         { jsonrpc: '2.0', id: 's', method: 'tools/call', params: { ...META, name: 'search', arguments: { query: 'audit' } } },
         { jsonrpc: '2.0', id: 'v', method: 'tools/list', params: { _meta: { 'io.modelcontextprotocol/protocolVersion': '1900-01-01' } } },
-        { jsonrpc: '2.0', id: 'w', method: 'tools/call', params: { ...META, name: 'write', arguments: { path: 'notes/argus.md', content: 'x', base_hash: null } } },
-        { jsonrpc: '2.0', id: 'e', method: 'tools/call', params: { ...META, name: 'append', arguments: { text: 'hello', to: 'notes/argus.md' } } },
+        { jsonrpc: '2.0', id: 'w', method: 'tools/call', params: { ...META, name: 'write', arguments: { path: 'notes/beacon.md', content: 'x', base_hash: null } } },
+        { jsonrpc: '2.0', id: 'e', method: 'tools/call', params: { ...META, name: 'append', arguments: { text: 'hello', to: 'notes/beacon.md' } } },
       ]);
       expect(answers.get('d')!.result).toMatchObject({ resultType: 'complete', supportedVersions: expect.arrayContaining(['2026-07-28', '2025-11-25']) });
-      expect(answers.get('s')!.result.structuredContent.hits[0].path).toBe('notes/argus.md');
+      expect(answers.get('s')!.result.structuredContent.hits[0].path).toBe('notes/beacon.md');
       expect(answers.get('v')!.error).toMatchObject({ code: -32022, data: { requested: '1900-01-01' } });
       // A verb the key does not grant is not a tool at all; a scope it does not grant is a tool error.
       expect(answers.get('w')!.error.code).toBe(-32602);
@@ -161,7 +161,7 @@ describe('who a server acts for', () => {
       return readdirSync(dir).flatMap((host) => readdirSync(path.join(dir, host)).flatMap((file) =>
         readFileSync(path.join(dir, host, file), 'utf8').split('\n').filter(Boolean).map((line) => JSON.parse(line) as Record<string, unknown>)));
     };
-    const read = (id: number, meta: object = {}) => ({ jsonrpc: '2.0', id, method: 'tools/call', params: { name: 'read', arguments: { ref: 'notes/argus.md' }, ...meta } });
+    const read = (id: number, meta: object = {}) => ({ jsonrpc: '2.0', id, method: 'tools/call', params: { name: 'read', arguments: { ref: 'notes/beacon.md' }, ...meta } });
     const owner = await Vault.open(root, { owner: true });
     try {
       await talk(owner, [

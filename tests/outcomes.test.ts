@@ -30,7 +30,7 @@ const quiet = () => {
 beforeEach(() => {
   root = mkdtempSync(path.join(os.tmpdir(), 'noto-outcomes-'));
   execFileSync('git', ['init', '-q', '-b', 'main'], { cwd: root });
-  write('a.md', '# Alpha\n\nArgus audits the indexes.\n');
+  write('a.md', '# Alpha\n\nBeacon audits the indexes.\n');
   write('b.md', '# Beta\n\nBeta names Alpha without a link.\n');
   execFileSync('git', ['add', '-A'], { cwd: root });
   execFileSync('git', ['commit', '-q', '-m', 'first'], {
@@ -54,7 +54,7 @@ describe('what becomes of a proposal', () => {
     const agent = await Vault.open(root, { key: 'k' });
     const owner = await Vault.open(root, { owner: true });
     try {
-      const first = agent.propose([{ path: 'a.md', content: '# Alpha\n\nArgus audits every index.\n' }], 'Say every index');
+      const first = agent.propose([{ path: 'a.md', content: '# Alpha\n\nBeacon audits every index.\n' }], 'Say every index');
       const second = owner.propose([{ path: 'b.md', content: '# Beta\n\nBeta names [[a|Alpha]].\n' }], 'Link Alpha');
       owner.accept(first.id, { reason: '  right  ', reviewMs: 4200.4 });
       owner.reject(second.id);
@@ -76,8 +76,8 @@ describe('what becomes of a proposal', () => {
   it('names the proposal when an accept stops on a conflict, and leaves the decision for later', async () => {
     const owner = await Vault.open(root, { owner: true });
     try {
-      const { id } = owner.propose([{ path: 'a.md', content: '# Alpha\n\nArgus audits one index.\n' }], 'One index');
-      write('a.md', '# Alpha\n\nArgus audits two indexes.\n');
+      const { id } = owner.propose([{ path: 'a.md', content: '# Alpha\n\nBeacon audits one index.\n' }], 'One index');
+      write('a.md', '# Alpha\n\nBeacon audits two indexes.\n');
       expect(owner.accept(id, { reason: 'ok' }).conflicts).toEqual(['a.md']);
       const stalled = lines().at(-1)!;
       expect(stalled).toMatchObject({ verb: 'propose', path: 'a.md', proposal: id });
@@ -94,7 +94,7 @@ describe('what becomes of a proposal', () => {
       expect(() => owner.reject(id, { reviewMs: -1 })).toThrow(/milliseconds/);
       expect(() => owner.accept(id, { reviewMs: Number.NaN })).toThrow(/milliseconds/);
       expect(owner.proposals().map((item) => item.id)).toEqual([id]);
-      expect(readFileSync(path.join(root, 'a.md'), 'utf8')).toBe('# Alpha\n\nArgus audits the indexes.\n');
+      expect(readFileSync(path.join(root, 'a.md'), 'utf8')).toBe('# Alpha\n\nBeacon audits the indexes.\n');
     } finally {
       owner.close();
     }

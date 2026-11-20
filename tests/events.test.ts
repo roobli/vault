@@ -22,8 +22,8 @@ const lines = (): Record<string, unknown>[] => {
 beforeEach(() => {
   root = mkdtempSync(path.join(os.tmpdir(), 'noto-events-'));
   mkdirSync(path.join(root, '.noto'));
-  writeFileSync(path.join(root, 'a.md'), '# Alpha\n\nArgus audits the search indexes.\n');
-  writeFileSync(path.join(root, 'b.md'), '# Beta\n\nArgus again, with more on the indexes.\n');
+  writeFileSync(path.join(root, 'a.md'), '# Alpha\n\nBeacon audits the search indexes.\n');
+  writeFileSync(path.join(root, 'b.md'), '# Beta\n\nBeacon again, with more on the indexes.\n');
 });
 afterEach(() => {
   rmSync(root, { recursive: true, force: true });
@@ -34,12 +34,12 @@ describe('writing events', () => {
   it('writes what one call did to several notes as one line, and one note as before', () => {
     const at = '2026-11-06T10:00:00.000Z';
     recordEvents(root, [
-      { time: at, actor: 'owner', verb: 'recall', path: 'a.md', query: 'argus' },
-      { time: at, actor: 'owner', verb: 'recall', path: 'b.md', query: 'argus' },
+      { time: at, actor: 'owner', verb: 'recall', path: 'a.md', query: 'beacon' },
+      { time: at, actor: 'owner', verb: 'recall', path: 'b.md', query: 'beacon' },
       { time: at, actor: 'owner', verb: 'open', path: 'a.md' },
     ], 'h');
     expect(lines()).toEqual([
-      { time: at, actor: 'owner', verb: 'recall', paths: ['a.md', 'b.md'], query: 'argus' },
+      { time: at, actor: 'owner', verb: 'recall', paths: ['a.md', 'b.md'], query: 'beacon' },
       { time: at, actor: 'owner', verb: 'open', path: 'a.md' },
     ]);
   });
@@ -101,7 +101,7 @@ describe('reading events', () => {
     writeFileSync(file, [
       { time: '2026-11-05T10:00:00.000Z', actor: 'owner', verb: 'open', path: 'a.md' },
       { time: '2026-11-05T10:00:02.000Z', actor: 'owner', verb: 'open', path: 'a.md', repeat: 2, until: '2026-11-05T10:00:04.000Z' },
-      { time: '2026-11-05T11:00:00.000Z', actor: 'owner', verb: 'recall', paths: ['a.md', 'b.md'], query: 'argus' },
+      { time: '2026-11-05T11:00:00.000Z', actor: 'owner', verb: 'recall', paths: ['a.md', 'b.md'], query: 'beacon' },
     ].map((line) => JSON.stringify(line)).join('\n') + '\n');
     const vault = await Vault.open(root, { owner: true });
     try {
@@ -139,13 +139,13 @@ describe('who an event names', () => {
   it('names the agent for a recall it runs as the person, and an agent with a key by its key', async () => {
     const vault = await Vault.open(root, { owner: true, actor: 'claude-code', session: 'cc1' });
     try {
-      recall(vault, 'argus indexes', { limit: 2 });
+      recall(vault, 'beacon indexes', { limit: 2 });
     } finally {
       vault.close();
     }
     const recalled = lines();
     expect(recalled).toHaveLength(1);
-    expect(recalled[0]).toMatchObject({ actor: 'claude-code', verb: 'recall', session: 'cc1', query: 'argus indexes' });
+    expect(recalled[0]).toMatchObject({ actor: 'claude-code', verb: 'recall', session: 'cc1', query: 'beacon indexes' });
     expect(recalled[0]!.paths ?? [recalled[0]!.path]).toEqual(expect.arrayContaining(['a.md']));
   });
 });
@@ -208,7 +208,7 @@ describe('noto-vault record', () => {
 
   it('records nothing while it measures recall', async () => {
     quiet();
-    writeFileSync(path.join(root, 'cases.yaml'), '- query: argus indexes\n  expect: [a.md]\n');
+    writeFileSync(path.join(root, 'cases.yaml'), '- query: beacon indexes\n  expect: [a.md]\n');
     await run(['--root', root, 'eval', path.join(root, 'cases.yaml')]);
     expect(lines()).toEqual([]);
   });

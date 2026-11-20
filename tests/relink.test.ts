@@ -8,7 +8,7 @@ import { relink, relinkTokens, type Move } from '../src/relink.js';
 
 /** The files after the moves, and the text of the notes, by where they are now. */
 function run(files: string[], moves: Move[], notes: Record<string, string>) {
-  const out = relink({ files, moves, notes: new Map(Object.entries(notes)), rootName: 'RooB' });
+  const out = relink({ files, moves, notes: new Map(Object.entries(notes)), rootName: 'Notes' });
   return Object.fromEntries(out.map((note) => [note.path, note.text]));
 }
 
@@ -20,7 +20,7 @@ describe('a note moved', () => {
       'essay.md': [
         'By path [[Ideas/plan]] and by name [[plan]], labelled [[Ideas/plan#Goals|the plan]].',
         'Relative [p](Ideas/plan.md#goals) and without the extension [q](Ideas/plan).',
-        'Absolute [r](/Users/me/RooB/Ideas/plan.md:12) and from the root [s](/Ideas/plan.md).',
+        'Absolute [r](/Users/me/Notes/Ideas/plan.md:12) and from the root [s](/Ideas/plan.md).',
         'Already broken [b](Ideas/gone.md), and in code `[c](Ideas/plan.md)`.',
       ].join('\n'),
       'Elsewhere/x.md': 'Up and over [p](../Ideas/plan.md), and <[p](<../Ideas/plan.md>)>.',
@@ -29,7 +29,7 @@ describe('a note moved', () => {
       'By path [[Work/plan]] and by name [[plan]], labelled [[Work/plan#Goals|the plan]].',
       'Relative [p](Work/plan.md#goals) and without the extension [q](Work/plan).',
       // The vault reads no link from the root as a path, so none reached the note to be broken.
-      'Absolute [r](/Users/me/RooB/Work/plan.md:12) and from the root [s](/Ideas/plan.md).',
+      'Absolute [r](/Users/me/Notes/Work/plan.md:12) and from the root [s](/Ideas/plan.md).',
       'Already broken [b](Ideas/gone.md), and in code `[c](Ideas/plan.md)`.',
     ].join('\n'));
     expect(out['Elsewhere/x.md']).toBe('Up and over [p](../Work/plan.md), and <[p](<../Work/plan.md>)>.');

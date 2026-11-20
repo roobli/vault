@@ -27,22 +27,22 @@ const commit = (message: string, when: string) => {
 beforeEach(() => {
   root = mkdtempSync(path.join(os.tmpdir(), 'noto-vault-'));
   git('init', '-q', '-b', 'main');
-  write('Projects/Argus/00_索引.md', '---\nmoc: true\nid: argus\naliases: [ArgusOld]\nstatus: ing\n---\n# Argus 审计\n\nArgus 是审计服务，负责搜索引擎的接入。\n');
-  write('Projects/Argus/2026_11_03_接入ES.md', '# Argus 接入 ES\n\n今天把 Argus 接入了 Elasticsearch，索引版本名写错了。\n\n- 属于 [[00_索引]]\n');
+  write('Projects/Beacon/00_索引.md', '---\nmoc: true\nid: beacon\naliases: [BeaconOld]\nstatus: ing\n---\n# Beacon 审计\n\nBeacon 是审计服务，负责搜索引擎的接入。\n');
+  write('Projects/Beacon/2026_11_03_接入ES.md', '# Beacon 接入 ES\n\n今天把 Beacon 接入了 Elasticsearch，索引版本名写错了。\n\n- 属于 [[00_索引]]\n');
   write('Knowledge/索引版本命名.md', '# 索引版本命名\n\n索引的版本名要带日期，回滚时才找得到。\n');
   write('Knowledge/old-plan.md', '# Old plan\n\nUse a single index for everything.\n');
-  write('Inbox/2026_11_04_想法.md', '# 想法\n\n索引版本命名这件事要写进规范。Argus 那边也要改。\n');
+  write('Inbox/2026_11_04_想法.md', '# 想法\n\n索引版本命名这件事要写进规范。Beacon 那边也要改。\n');
   write('Inbox/table.md', '# Table\n\n| what | where |\n| --- | --- |\n| Old plan | here |\n');
-  write('Private/diary.md', '# Diary\n\nsecret things about Argus\n');
-  write('Sealed/keys.md', '# Keys\n\nArgus root password\n');
+  write('Private/diary.md', '# Diary\n\nsecret things about Beacon\n');
+  write('Sealed/keys.md', '# Keys\n\nBeacon root password\n');
   commit('first', '2026-11-01T10:00:00Z');
   git('mv', 'Knowledge/old-plan.md', 'Knowledge/plan-v1.md');
   write('Knowledge/plan-v2.md', '# Plan v2\n\nOne index per tenant, see [[old-plan]].\n');
   commit('rename the plan', '2026-11-02T10:00:00Z');
-  write('Projects/Argus/2026_11_03_接入ES.md', `${readFileSync(path.join(root, 'Projects/Argus/2026_11_03_接入ES.md'), 'utf8')}\n更新。\n`);
+  write('Projects/Beacon/2026_11_03_接入ES.md', `${readFileSync(path.join(root, 'Projects/Beacon/2026_11_03_接入ES.md'), 'utf8')}\n更新。\n`);
   write('Knowledge/索引版本命名.md', `${readFileSync(path.join(root, 'Knowledge/索引版本命名.md'), 'utf8')}\n补充。\n`);
   commit('together', '2026-11-03T10:00:00Z');
-  write('Projects/Argus/2026_11_03_接入ES.md', `${readFileSync(path.join(root, 'Projects/Argus/2026_11_03_接入ES.md'), 'utf8')}\n再更新。\n`);
+  write('Projects/Beacon/2026_11_03_接入ES.md', `${readFileSync(path.join(root, 'Projects/Beacon/2026_11_03_接入ES.md'), 'utf8')}\n再更新。\n`);
   write('Knowledge/索引版本命名.md', `${readFileSync(path.join(root, 'Knowledge/索引版本命名.md'), 'utf8')}\n再补充。\n`);
   commit('together again', '2026-11-04T10:00:00Z');
   write('.noto/access.yaml', [
@@ -68,14 +68,14 @@ describe('a vault as memory', () => {
     const vault = await Vault.open(root, { owner: true });
     try {
       expect(vault.status()).toMatchObject({ notes: 9, kinds: { card: 1, log: 2, note: 6 } });
-      expect(vault.find('argus')?.path).toBe('Projects/Argus/00_索引.md');
-      expect(vault.find('ArgusOld')?.kind).toBe('card');
+      expect(vault.find('beacon')?.path).toBe('Projects/Beacon/00_索引.md');
+      expect(vault.find('BeaconOld')?.kind).toBe('card');
       expect(vault.find('Knowledge/old-plan')?.path).toBe('Knowledge/plan-v1.md');
       // The link written before the rename still reaches its note, through the old name.
       const plan = vault.read('Knowledge/plan-v2.md');
       expect(plan.links).toEqual([expect.objectContaining({ target: 'old-plan', resolved: 'Knowledge/plan-v1.md' })]);
-      expect(vault.backlinks('Projects/Argus/00_索引.md')).toEqual([expect.objectContaining({ path: 'Projects/Argus/2026_11_03_接入ES.md', relation: 'part_of' })]);
-      expect(vault.where('argus')).toMatchObject({ folder: 'Projects/Argus', kind: 'card' });
+      expect(vault.backlinks('Projects/Beacon/00_索引.md')).toEqual([expect.objectContaining({ path: 'Projects/Beacon/2026_11_03_接入ES.md', relation: 'part_of' })]);
+      expect(vault.where('beacon')).toMatchObject({ folder: 'Projects/Beacon', kind: 'card' });
     } finally {
       vault.close();
     }
@@ -86,7 +86,7 @@ describe('a vault as memory', () => {
     try {
       const hits = vault.search('版本');
       expect(hits[0]!.path).toBe('Knowledge/索引版本命名.md');
-      expect(hits.map((hit) => hit.path)).toContain('Projects/Argus/2026_11_03_接入ES.md');
+      expect(hits.map((hit) => hit.path)).toContain('Projects/Beacon/2026_11_03_接入ES.md');
       expect(vault.search('Elasticsearch')[0]!.snippet).toContain('Elasticsearch');
     } finally {
       vault.close();
@@ -98,7 +98,7 @@ describe('a vault as memory', () => {
     const stranger = await Vault.open(root, {});
     try {
       expect(agent.principal.name).toBe('agent');
-      expect(agent.search('Argus').map((hit) => hit.path)).toContain('Private/diary.md');
+      expect(agent.search('Beacon').map((hit) => hit.path)).toContain('Private/diary.md');
       expect(agent.search('password')).toEqual([]);
       expect(stranger.search('secret').map((hit) => hit.path)).not.toContain('Private/diary.md');
       expect(() => agent.read('Sealed/keys.md')).toThrow(/No note/);
@@ -153,7 +153,7 @@ describe('a vault as memory', () => {
       // Forty minutes later is another train of thought.
       expect(graph.edges.some((edge) => edge.type === 'visit' && (edge.source === 'Knowledge/plan-v2.md' || edge.target === 'Knowledge/plan-v2.md'))).toBe(false);
       const together = graph.edges.filter((edge) => edge.type === 'co_change').sort((left, right) => right.count - left.count)[0]!;
-      expect([together.source, together.target].sort()).toEqual(['Knowledge/索引版本命名.md', 'Projects/Argus/2026_11_03_接入ES.md']);
+      expect([together.source, together.target].sort()).toEqual(['Knowledge/索引版本命名.md', 'Projects/Beacon/2026_11_03_接入ES.md']);
       expect(graph.edges.some((edge) => edge.type === 'relation' && edge.relation === 'part_of')).toBe(true);
     } finally {
       vault.close();
@@ -163,10 +163,10 @@ describe('a vault as memory', () => {
   it('recalls a context pack with provenance, cards and their neighbours first', async () => {
     const vault = await Vault.open(root, { owner: true });
     try {
-      const pack = recall(vault, 'Argus 索引版本');
+      const pack = recall(vault, 'Beacon 索引版本');
       const paths = pack.items.map((item) => item.path);
-      expect(paths.slice(0, 3)).toEqual(expect.arrayContaining(['Projects/Argus/2026_11_03_接入ES.md', 'Knowledge/索引版本命名.md']));
-      expect(paths).toContain('Projects/Argus/00_索引.md');
+      expect(paths.slice(0, 3)).toEqual(expect.arrayContaining(['Projects/Beacon/2026_11_03_接入ES.md', 'Knowledge/索引版本命名.md']));
+      expect(paths).toContain('Projects/Beacon/00_索引.md');
       expect(pack.items[0]!.why.length).toBeGreaterThan(0);
       expect(pack.items.every((item) => item.excerpt.length > 0)).toBe(true);
       expect(pack.chars).toBeLessThanOrEqual(6000);
@@ -176,7 +176,7 @@ describe('a vault as memory', () => {
     const agent = await Vault.open(root, { key: 'secret-key' });
     try {
       // The owner sees sealed notes; an agent never does.
-      expect(recall(agent, 'Argus password').items.map((item) => item.path)).not.toContain('Sealed/keys.md');
+      expect(recall(agent, 'Beacon password').items.map((item) => item.path)).not.toContain('Sealed/keys.md');
     } finally {
       agent.close();
     }
@@ -210,7 +210,7 @@ describe('a vault as memory', () => {
       const all = suggest(vault);
       const mention = all.find((item) => item.type === 'mention' && item.from === 'Inbox/2026_11_04_想法.md' && item.to === 'Knowledge/索引版本命名.md')!;
       expect(mention.splice!.replacement).toBe('[[索引版本命名]]');
-      expect(all.some((item) => item.type === 'mention' && item.to === 'Projects/Argus/00_索引.md' && item.from === 'Inbox/2026_11_04_想法.md')).toBe(true);
+      expect(all.some((item) => item.type === 'mention' && item.to === 'Projects/Beacon/00_索引.md' && item.from === 'Inbox/2026_11_04_想法.md')).toBe(true);
       // "Old plan" in a table would need a label, whose | would split the cell.
       expect(all.some((item) => item.from === 'Inbox/table.md')).toBe(false);
       const stale = all.find((item) => item.type === 'stale')!;
@@ -267,7 +267,7 @@ describe('a vault as memory', () => {
   });
 
   it('runs the vault\'s own scripts to derive fields, and re-derives when a script changes', async () => {
-    write('.noto/scripts/10-roob.mjs', `export default {
+    write('.noto/scripts/10-notes.mjs', `export default {
       derive(note) {
         if (note.path.startsWith('Knowledge/')) return { source: 'heard', tags: ['knowledge'] };
         if (note.path.startsWith('Private/')) return { sensitivity: 'sealed' };

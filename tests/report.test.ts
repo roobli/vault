@@ -26,8 +26,8 @@ let output: string[];
 beforeEach(() => {
   root = mkdtempSync(path.join(os.tmpdir(), 'noto-report-'));
   execFileSync('git', ['init', '-q', '-b', 'main'], { cwd: root });
-  write('Projects/index.md', '---\nmoc: true\nid: argus\n---\n# Argus\n\nSee [[Plan]] and [[Missing note]].\n');
-  write('Plan.md', '# Plan\n\nThe plan, for [[Argus]]. Also [gone](Nowhere/gone.md).\n');
+  write('Projects/index.md', '---\nmoc: true\nid: beacon\n---\n# Beacon\n\nSee [[Plan]] and [[Missing note]].\n');
+  write('Plan.md', '# Plan\n\nThe plan, for [[Beacon]]. Also [gone](Nowhere/gone.md).\n');
   write('Decisions/choice.md', '---\nkind: decision\n---\n# Choice\n\nWe chose. See [[Plan]].\n');
   write('Alone.md', '# Alone\n\nNothing links here, and this links nowhere.\n');
   write('Logs/2026-11-03 day.md', '# Day\n\nA day alone, as logs are.\n');

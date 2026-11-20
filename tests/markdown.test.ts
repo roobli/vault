@@ -4,7 +4,7 @@ import { dateFromName, extractLinks, parseNote } from '../src/markdown.js';
 describe('reading a note', () => {
   it('finds wiki links, Markdown links and images outside code, as the vault tool does', () => {
     const text = [
-      'See [[Argus]] and [[Work/plan#Goals|the plan]], ![pic](img/a.png) and [doc](../x.md#top).',
+      'See [[Beacon]] and [[Work/plan#Goals|the plan]], ![pic](img/a.png) and [doc](../x.md#top).',
       '`[[not a link]]` and a [site](https://example.com) and [[123]] and [[:alpha:]].',
       '```',
       '[[inside a fence]]',
@@ -12,7 +12,7 @@ describe('reading a note', () => {
     ].join('\n');
     const links = extractLinks(text);
     expect(links.map((link) => [link.kind, link.target, link.anchor, link.label])).toEqual([
-      ['wiki', 'Argus', '', null],
+      ['wiki', 'Beacon', '', null],
       ['wiki', 'Work/plan', '#Goals', 'the plan'],
       ['img', 'img/a.png', '', 'pic'],
       ['md', '../x.md', '#top', 'doc'],
@@ -20,10 +20,10 @@ describe('reading a note', () => {
   });
 
   it('reads typed relation lines and leaves ordinary list items alone', () => {
-    const text = '# Title\n\n- 属于 [[Argus]]\n- **取代**：[[old plan]]、[[older plan]]\n- see [[X]] for more\n- related: [[Y]]\n';
+    const text = '# Title\n\n- 属于 [[Beacon]]\n- **取代**：[[old plan]]、[[older plan]]\n- see [[X]] for more\n- related: [[Y]]\n';
     const note = parseNote('a.md', text);
     expect(note.links.map((link) => [link.target, link.relation])).toEqual([
-      ['Argus', 'part_of'], ['old plan', 'supersedes'], ['older plan', 'supersedes'], ['X', null], ['Y', 'related'],
+      ['Beacon', 'part_of'], ['old plan', 'supersedes'], ['older plan', 'supersedes'], ['X', null], ['Y', 'related'],
     ]);
     expect(note.links[0]!.line).toBe(3);
   });

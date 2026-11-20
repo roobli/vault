@@ -48,7 +48,7 @@ A note is a `.md` or `.markdown` file. The index reads, per note:
 - headings, links (`[[target]]`, `[[target|label]]`, `[[target#anchor]]`,
   `[text](path.md)`, `![alt](path)`), outside fenced and inline code;
 - typed relations: a list item whose first word is a relation name followed by
-  links, such as `- 属于 [[Argus]]` or `- supersedes [[old plan]]`.
+  links, such as `- 属于 [[Beacon]]` or `- supersedes [[old plan]]`.
 
 Four kinds, by when the note is true:
 
@@ -479,7 +479,7 @@ default-exports an object with any of:
 
 ```js
 export default {
-  name: 'roob',
+  name: 'notes',
   ignore(path) { return false },              // true keeps a file out of the index
   text(note) { return note.body },            // the text that search sees
   derive(note, ctx) { return { kind, source, sensitivity, status, aliases, tags, relations } },
